@@ -1,0 +1,2839 @@
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id CF2EAC433EF
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:44:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B85146120F
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:44:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1344323AbhKPBre (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:47:34 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36057 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1351588AbhKPBjP (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:39:15 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023943"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023943"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:18 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262515"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:35:57 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 1/6] NUMA Balancing: add page promotion counter
+Date:   Tue, 16 Nov 2021 09:35:17 +0800
+Message-Id: <20211116013522.140575-2-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+In a system with multiple memory types, e.g. DRAM and PMEM, the CPU
+and DRAM in one socket will be put in one NUMA node as before, while
+the PMEM will be put in another NUMA node as described in the
+description of the commit c221c0b0308f ("device-dax: "Hotplug"
+persistent memory for use like normal RAM").  So, the NUMA balancing
+mechanism will identify all PMEM accesses as remote access and try to
+promote the PMEM pages to DRAM.
+
+To distinguish the number of the inter-type promoted pages from that
+of the inter-socket migrated pages.  A new vmstat count is added.  The
+counter is per-node (count in the target node).  So this can be used
+to identify promotion imbalance among the NUMA nodes.
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ include/linux/mmzone.h |  3 +++
+ include/linux/node.h   |  5 +++++
+ mm/migrate.c           | 13 ++++++++++---
+ mm/vmstat.c            |  3 +++
+ 4 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+index 58e744b78c2c..eda6d2f09d77 100644
+--- a/include/linux/mmzone.h
++++ b/include/linux/mmzone.h
+@@ -210,6 +210,9 @@ enum node_stat_item {
+ 	NR_PAGETABLE,		/* used for pagetables */
+ #ifdef CONFIG_SWAP
+ 	NR_SWAPCACHE,
++#endif
++#ifdef CONFIG_NUMA_BALANCING
++	PGPROMOTE_SUCCESS,	/* promote successfully */
+ #endif
+ 	NR_VM_NODE_STAT_ITEMS
+ };
+diff --git a/include/linux/node.h b/include/linux/node.h
+index bb21fd631b16..81bbf1c0afd3 100644
+--- a/include/linux/node.h
++++ b/include/linux/node.h
+@@ -181,4 +181,9 @@ static inline void register_hugetlbfs_with_node(node_registration_func_t reg,
+ 
+ #define to_node(device) container_of(device, struct node, dev)
+ 
++static inline bool node_is_toptier(int node)
++{
++	return node_state(node, N_CPU);
++}
++
+ #endif /* _LINUX_NODE_H_ */
+diff --git a/mm/migrate.c b/mm/migrate.c
+index cf25b00f03c8..b7c27abb0e5c 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -2141,6 +2141,7 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+ 	pg_data_t *pgdat = NODE_DATA(node);
+ 	int isolated;
+ 	int nr_remaining;
++	int nr_succeeded;
+ 	LIST_HEAD(migratepages);
+ 	new_page_t *new;
+ 	bool compound;
+@@ -2179,7 +2180,8 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+ 
+ 	list_add(&page->lru, &migratepages);
+ 	nr_remaining = migrate_pages(&migratepages, *new, NULL, node,
+-				     MIGRATE_ASYNC, MR_NUMA_MISPLACED, NULL);
++				     MIGRATE_ASYNC, MR_NUMA_MISPLACED,
++				     &nr_succeeded);
+ 	if (nr_remaining) {
+ 		if (!list_empty(&migratepages)) {
+ 			list_del(&page->lru);
+@@ -2188,8 +2190,13 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+ 			putback_lru_page(page);
+ 		}
+ 		isolated = 0;
+-	} else
+-		count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_pages);
++	}
++	if (nr_succeeded) {
++		count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_succeeded);
++		if (!node_is_toptier(page_to_nid(page)) && node_is_toptier(node))
++			mod_node_page_state(NODE_DATA(node), PGPROMOTE_SUCCESS,
++					    nr_succeeded);
++	}
+ 	BUG_ON(!list_empty(&migratepages));
+ 	return isolated;
+ 
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index d701c335628c..53a6e92b1efb 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -1242,6 +1242,9 @@ const char * const vmstat_text[] = {
+ #ifdef CONFIG_SWAP
+ 	"nr_swapcached",
+ #endif
++#ifdef CONFIG_NUMA_BALANCING
++	"pgpromote_success",
++#endif
+ 
+ 	/* enum writeback_stat_item counters */
+ 	"nr_dirty_threshold",
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 91564C433EF
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:44:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7552D61265
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:44:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1356387AbhKPBru (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:47:50 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36057 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S242478AbhKPBlP (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:41:15 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023952"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023952"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:19 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262527"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:11 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 4/6] memory tiering: hot page selection with hint page fault latency
+Date:   Tue, 16 Nov 2021 09:35:20 +0800
+Message-Id: <20211116013522.140575-5-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+To optimize page placement in a memory tiering system with NUMA
+balancing, the hot pages in the slow memory node need to be
+identified.  Essentially, the original NUMA balancing implementation
+selects the mostly recently accessed (MRU) pages as the hot pages.
+But this isn't a very good algorithm to identify the hot pages.
+
+So, in this patch we implemented a better hot page selection
+algorithm.  Which is based on NUMA balancing page table scanning and
+hint page fault as follows,
+
+- When the page tables of the processes are scanned to change PTE/PMD
+  to be PROT_NONE, the current time is recorded in struct page as scan
+  time.
+
+- When the page is accessed, hint page fault will occur.  The scan
+  time is gotten from the struct page.  And The hint page fault
+  latency is defined as
+
+    hint page fault time - scan time
+
+The shorter the hint page fault latency of a page is, the higher the
+probability of their access frequency to be higher.  So the hint page
+fault latency is a good estimation of the page hot/cold.
+
+But it's hard to find some extra space in struct page to hold the scan
+time.  Fortunately, we can reuse some bits used by the original NUMA
+balancing.
+
+NUMA balancing uses some bits in struct page to store the page
+accessing CPU and PID (referring to page_cpupid_xchg_last()).  Which
+is used by the multi-stage node selection algorithm to avoid to
+migrate pages shared accessed by the NUMA nodes back and forth.  But
+for pages in the slow memory node, even if they are shared accessed by
+multiple NUMA nodes, as long as the pages are hot, they need to be
+promoted to the fast memory node.  So the accessing CPU and PID
+information are unnecessary for the slow memory pages.  We can reuse
+these bits in struct page to record the scan time for them.  For the
+fast memory pages, these bits are used as before.
+
+The remaining problem is how to determine the hot threshold.  It's not
+easy to be done automatically.  So we provide a sysctl knob:
+kernel.numa_balancing_hot_threshold_ms.  All pages with hint page
+fault latency < the threshold will be considered hot.  The system
+administrator can determine the hot threshold via various information,
+such as PMEM bandwidth limit, the average number of the pages pass the
+hot threshold, etc.  The default hot threshold is 1 second, which
+works well in our performance test.
+
+The downside of the patch is that the response time to the workload
+hot spot changing may be much longer.  For example,
+
+- A previous cold memory area becomes hot
+
+- The hint page fault will be triggered.  But the hint page fault
+  latency isn't shorter than the hot threshold.  So the pages will
+  not be promoted.
+
+- When the memory area is scanned again, maybe after a scan period,
+  the hint page fault latency measured will be shorter than the hot
+  threshold and the pages will be promoted.
+
+To mitigate this,
+
+- If there are enough free space in the fast memory node, the hot
+  threshold will not be used, all pages will be promoted upon the hint
+  page fault for fast response.
+
+- If fast response is more important for system performance, the
+  administrator can set a higher hot threshold.
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ include/linux/mm.h           | 29 ++++++++++++++++
+ include/linux/sched/sysctl.h |  1 +
+ kernel/sched/fair.c          | 67 ++++++++++++++++++++++++++++++++++++
+ kernel/sysctl.c              |  7 ++++
+ mm/huge_memory.c             | 13 +++++--
+ mm/memory.c                  | 11 +++++-
+ mm/migrate.c                 | 12 +++++++
+ mm/mmzone.c                  | 17 +++++++++
+ mm/mprotect.c                |  8 ++++-
+ 9 files changed, 160 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/mm.h b/include/linux/mm.h
+index a7e4a9e7d807..a9ea778eafe0 100644
+--- a/include/linux/mm.h
++++ b/include/linux/mm.h
+@@ -1393,6 +1393,18 @@ static inline int folio_nid(const struct folio *folio)
+ }
+ 
+ #ifdef CONFIG_NUMA_BALANCING
++/* page access time bits needs to hold at least 4 seconds */
++#define PAGE_ACCESS_TIME_MIN_BITS	12
++#if LAST_CPUPID_SHIFT < PAGE_ACCESS_TIME_MIN_BITS
++#define PAGE_ACCESS_TIME_BUCKETS				\
++	(PAGE_ACCESS_TIME_MIN_BITS - LAST_CPUPID_SHIFT)
++#else
++#define PAGE_ACCESS_TIME_BUCKETS	0
++#endif
++
++#define PAGE_ACCESS_TIME_MASK				\
++	(LAST_CPUPID_MASK << PAGE_ACCESS_TIME_BUCKETS)
++
+ static inline int cpu_pid_to_cpupid(int cpu, int pid)
+ {
+ 	return ((cpu & LAST__CPU_MASK) << LAST__PID_SHIFT) | (pid & LAST__PID_MASK);
+@@ -1435,6 +1447,16 @@ static inline int page_cpupid_xchg_last(struct page *page, int cpupid)
+ 	return xchg(&page->_last_cpupid, cpupid & LAST_CPUPID_MASK);
+ }
+ 
++static inline unsigned int xchg_page_access_time(struct page *page,
++						 unsigned int time)
++{
++	unsigned int last_time;
++
++	last_time = xchg(&page->_last_cpupid,
++			 (time >> PAGE_ACCESS_TIME_BUCKETS) & LAST_CPUPID_MASK);
++	return last_time << PAGE_ACCESS_TIME_BUCKETS;
++}
++
+ static inline int page_cpupid_last(struct page *page)
+ {
+ 	return page->_last_cpupid;
+@@ -1450,6 +1472,7 @@ static inline int page_cpupid_last(struct page *page)
+ }
+ 
+ extern int page_cpupid_xchg_last(struct page *page, int cpupid);
++extern unsigned int xchg_page_access_time(struct page *page, unsigned int time);
+ 
+ static inline void page_cpupid_reset_last(struct page *page)
+ {
+@@ -1462,6 +1485,12 @@ static inline int page_cpupid_xchg_last(struct page *page, int cpupid)
+ 	return page_to_nid(page); /* XXX */
+ }
+ 
++static inline unsigned int xchg_page_access_time(struct page *page,
++						 unsigned int time)
++{
++	return 0;
++}
++
+ static inline int page_cpupid_last(struct page *page)
+ {
+ 	return page_to_nid(page); /* XXX */
+diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.h
+index bc54c1d75d6d..0ea43b146aee 100644
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -41,6 +41,7 @@ enum sched_tunable_scaling {
+ 
+ #ifdef CONFIG_NUMA_BALANCING
+ extern int sysctl_numa_balancing_mode;
++extern unsigned int sysctl_numa_balancing_hot_threshold;
+ #else
+ #define sysctl_numa_balancing_mode	0
+ #endif
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 6e476f6d9435..2b78664a5ce2 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -1026,6 +1026,9 @@ unsigned int sysctl_numa_balancing_scan_size = 256;
+ /* Scan @scan_size MB every @scan_period after an initial @scan_delay in ms */
+ unsigned int sysctl_numa_balancing_scan_delay = 1000;
+ 
++/* The page with hint page fault latency < threshold in ms is considered hot */
++unsigned int sysctl_numa_balancing_hot_threshold = 1000;
++
+ struct numa_group {
+ 	refcount_t refcount;
+ 
+@@ -1367,6 +1370,37 @@ static inline unsigned long group_weight(struct task_struct *p, int nid,
+ 	return 1000 * faults / total_faults;
+ }
+ 
++static bool pgdat_free_space_enough(struct pglist_data *pgdat)
++{
++	int z;
++	unsigned long enough_mark;
++
++	enough_mark = max(1UL * 1024 * 1024 * 1024 >> PAGE_SHIFT,
++			  pgdat->node_present_pages >> 4);
++	for (z = pgdat->nr_zones - 1; z >= 0; z--) {
++		struct zone *zone = pgdat->node_zones + z;
++
++		if (!populated_zone(zone))
++			continue;
++
++		if (zone_watermark_ok(zone, 0,
++				      high_wmark_pages(zone) + enough_mark,
++				      ZONE_MOVABLE, 0))
++			return true;
++	}
++	return false;
++}
++
++static int numa_hint_fault_latency(struct page *page)
++{
++	unsigned int last_time, time;
++
++	time = jiffies_to_msecs(jiffies);
++	last_time = xchg_page_access_time(page, time);
++
++	return (time - last_time) & PAGE_ACCESS_TIME_MASK;
++}
++
+ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 				int src_nid, int dst_cpu)
+ {
+@@ -1374,6 +1408,27 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 	int dst_nid = cpu_to_node(dst_cpu);
+ 	int last_cpupid, this_cpupid;
+ 
++	/*
++	 * The pages in slow memory node should be migrated according
++	 * to hot/cold instead of accessing CPU node.
++	 */
++	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
++	    !node_is_toptier(src_nid)) {
++		struct pglist_data *pgdat;
++		unsigned long latency, th;
++
++		pgdat = NODE_DATA(dst_nid);
++		if (pgdat_free_space_enough(pgdat))
++			return true;
++
++		th = sysctl_numa_balancing_hot_threshold;
++		latency = numa_hint_fault_latency(page);
++		if (latency > th)
++			return false;
++
++		return true;
++	}
++
+ 	this_cpupid = cpu_pid_to_cpupid(dst_cpu, current->pid);
+ 	last_cpupid = page_cpupid_xchg_last(page, this_cpupid);
+ 
+@@ -2592,6 +2647,11 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
+ 	if (!p->mm)
+ 		return;
+ 
++	/* Numa faults statistics are unnecessary for the slow memory node */
++	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
++	    !node_is_toptier(mem_node))
++		return;
++
+ 	/* Allocate buffer to track faults on a per-node basis */
+ 	if (unlikely(!p->numa_faults)) {
+ 		int size = sizeof(*p->numa_faults) *
+@@ -2611,6 +2671,13 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
+ 	 */
+ 	if (unlikely(last_cpupid == (-1 & LAST_CPUPID_MASK))) {
+ 		priv = 1;
++	} else if (unlikely(!cpu_online(cpupid_to_cpu(last_cpupid)))) {
++		/*
++		 * In memory tiering mode, cpupid of slow memory page is
++		 * used to record page access time, so its value may be
++		 * invalid during numa balancing mode transition.
++		 */
++		return;
+ 	} else {
+ 		priv = cpupid_match_pid(p, last_cpupid);
+ 		if (!priv && !(flags & TNF_NO_GROUP))
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index a1be94ea80ba..40432524642a 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -1811,6 +1811,13 @@ static struct ctl_table kern_table[] = {
+ 		.extra1		= SYSCTL_ZERO,
+ 		.extra2		= &three,
+ 	},
++	{
++		.procname	= "numa_balancing_hot_threshold_ms",
++		.data		= &sysctl_numa_balancing_hot_threshold,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec,
++	},
+ #endif /* CONFIG_NUMA_BALANCING */
+ 	{
+ 		.procname	= "sched_rt_period_us",
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index cab8048eb779..1999ef14582e 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1430,7 +1430,7 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf)
+ 	struct page *page;
+ 	unsigned long haddr = vmf->address & HPAGE_PMD_MASK;
+ 	int page_nid = NUMA_NO_NODE;
+-	int target_nid, last_cpupid = -1;
++	int target_nid, last_cpupid = (-1 & LAST_CPUPID_MASK);
+ 	bool migrated = false;
+ 	bool was_writable = pmd_savedwrite(oldpmd);
+ 	int flags = 0;
+@@ -1451,7 +1451,8 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf)
+ 		flags |= TNF_NO_GROUP;
+ 
+ 	page_nid = page_to_nid(page);
+-	last_cpupid = page_cpupid_last(page);
++	if (node_is_toptier(page_nid))
++		last_cpupid = page_cpupid_last(page);
+ 	target_nid = numa_migrate_prep(page, vma, haddr, page_nid,
+ 				       &flags);
+ 
+@@ -1769,6 +1770,7 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 
+ 	if (prot_numa) {
+ 		struct page *page;
++		bool toptier;
+ 		/*
+ 		 * Avoid trapping faults against the zero page. The read-only
+ 		 * data is likely to be read-cached on the local CPU and
+@@ -1781,13 +1783,18 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 			goto unlock;
+ 
+ 		page = pmd_page(*pmd);
++		toptier = node_is_toptier(page_to_nid(page));
+ 		/*
+ 		 * Skip scanning top tier node if normal numa
+ 		 * balancing is disabled
+ 		 */
+ 		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
+-		    node_is_toptier(page_to_nid(page)))
++		    toptier)
+ 			goto unlock;
++
++		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
++		    !toptier)
++			xchg_page_access_time(page, jiffies_to_msecs(jiffies));
+ 	}
+ 	/*
+ 	 * In case prot_numa, we are under mmap_read_lock(mm). It's critical
+diff --git a/mm/memory.c b/mm/memory.c
+index 8f1de811a1dc..432c144c30b8 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -73,6 +73,7 @@
+ #include <linux/perf_event.h>
+ #include <linux/ptrace.h>
+ #include <linux/vmalloc.h>
++#include <linux/sched/sysctl.h>
+ 
+ #include <trace/events/kmem.h>
+ 
+@@ -4371,8 +4372,16 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
+ 	if (page_mapcount(page) > 1 && (vma->vm_flags & VM_SHARED))
+ 		flags |= TNF_SHARED;
+ 
+-	last_cpupid = page_cpupid_last(page);
+ 	page_nid = page_to_nid(page);
++	/*
++	 * In memory tiering mode, cpupid of slow memory page is used
++	 * to record page access time.  So use default value.
++	 */
++	if ((sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) &&
++	    !node_is_toptier(page_nid))
++		last_cpupid = (-1 & LAST_CPUPID_MASK);
++	else
++		last_cpupid = page_cpupid_last(page);
+ 	target_nid = numa_migrate_prep(page, vma, vmf->address, page_nid,
+ 			&flags);
+ 	if (target_nid == NUMA_NO_NODE) {
+diff --git a/mm/migrate.c b/mm/migrate.c
+index 286c84c014dd..03006bbd4042 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -572,6 +572,18 @@ void folio_migrate_flags(struct folio *newfolio, struct folio *folio)
+ 	 * future migrations of this same page.
+ 	 */
+ 	cpupid = page_cpupid_xchg_last(&folio->page, -1);
++	/*
++	 * If migrate between slow and fast memory node, reset cpupid,
++	 * because that is used to record page access time in slow
++	 * memory node
++	 */
++	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) {
++		bool f_toptier = node_is_toptier(page_to_nid(&folio->page));
++		bool t_toptier = node_is_toptier(page_to_nid(&newfolio->page));
++
++		if (f_toptier != t_toptier)
++			cpupid = -1;
++	}
+ 	page_cpupid_xchg_last(&newfolio->page, cpupid);
+ 
+ 	folio_migrate_ksm(newfolio, folio);
+diff --git a/mm/mmzone.c b/mm/mmzone.c
+index eb89d6e018e2..27f9075632ee 100644
+--- a/mm/mmzone.c
++++ b/mm/mmzone.c
+@@ -99,4 +99,21 @@ int page_cpupid_xchg_last(struct page *page, int cpupid)
+ 
+ 	return last_cpupid;
+ }
++
++unsigned int xchg_page_access_time(struct page *page, unsigned int time)
++{
++	unsigned long old_flags, flags;
++	unsigned int last_time;
++
++	time >>= PAGE_ACCESS_TIME_BUCKETS;
++	do {
++		old_flags = flags = page->flags;
++		last_time = (flags >> LAST_CPUPID_PGSHIFT) & LAST_CPUPID_MASK;
++
++		flags &= ~(LAST_CPUPID_MASK << LAST_CPUPID_PGSHIFT);
++		flags |= (time & LAST_CPUPID_MASK) << LAST_CPUPID_PGSHIFT;
++	} while (unlikely(cmpxchg(&page->flags, old_flags, flags) != old_flags));
++
++	return last_time << PAGE_ACCESS_TIME_BUCKETS;
++}
+ #endif
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index ddc24ca52b12..407559241b58 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -85,6 +85,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 			if (prot_numa) {
+ 				struct page *page;
+ 				int nid;
++				bool toptier;
+ 
+ 				/* Avoid TLB flush if possible */
+ 				if (pte_protnone(oldpte))
+@@ -114,14 +115,19 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 				nid = page_to_nid(page);
+ 				if (target_node == nid)
+ 					continue;
++				toptier = node_is_toptier(nid);
+ 
+ 				/*
+ 				 * Skip scanning top tier node if normal numa
+ 				 * balancing is disabled
+ 				 */
+ 				if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
+-				    node_is_toptier(nid))
++				    toptier)
+ 					continue;
++				if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
++				    !toptier)
++					xchg_page_access_time(page,
++						jiffies_to_msecs(jiffies));
+ 			}
+ 
+ 			oldpte = ptep_modify_prot_start(vma, addr, pte);
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 3EFC1C433EF
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:45:05 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 250BE61265
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:45:05 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1357312AbhKPBr7 (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:47:59 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36068 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1357178AbhKPBlT (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:41:19 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023989"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023989"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:24 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262575"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:20 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 6/6] memory tiering: adjust hot threshold automatically
+Date:   Tue, 16 Nov 2021 09:35:22 +0800
+Message-Id: <20211116013522.140575-7-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+It isn't easy for the administrator to determine the hot threshold.
+So in this patch, a method to adjust the hot threshold automatically
+is implemented.  The basic idea is to control the number of the
+candidate promotion pages to match the promotion rate limit.  If the
+hint page fault latency of a page is less than the hot threshold, we
+will try to promote the page, and the page is called the candidate
+promotion page.
+
+If the number of the candidate promotion pages in the statistics
+interval is much more than the promotion rate limit, the hot threshold
+will be decreased to reduce the number of the candidate promotion
+pages.  Otherwise, the hot threshold will be increased to increase the
+number of the candidate promotion pages.
+
+To make the above method works, in each statistics interval, the total
+number of the pages to check (on which the hint page faults occur) and
+the hot/cold distribution need to be stable.  Because the page tables
+are scanned linearly in NUMA balancing, but the hot/cold distribution
+isn't uniform along the address, the statistics interval should be
+larger than the NUMA balancing scan period.  So in the patch, the max
+scan period is used as statistics interval and it works well in our
+tests.
+
+The sysctl knob kernel.numa_balancing_hot_threshold_ms becomes the
+initial value and max value of the hot threshold.
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ include/linux/mmzone.h       |  3 ++
+ include/linux/sched/sysctl.h |  2 ++
+ kernel/sched/core.c          | 15 +++++++++
+ kernel/sched/fair.c          | 64 +++++++++++++++++++++++++++++++++---
+ kernel/sysctl.c              |  3 +-
+ 5 files changed, 81 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+index f3b044993bc5..4ac0ae1cf15d 100644
+--- a/include/linux/mmzone.h
++++ b/include/linux/mmzone.h
+@@ -906,6 +906,9 @@ typedef struct pglist_data {
+ #ifdef CONFIG_NUMA_BALANCING
+ 	unsigned long numa_ts;
+ 	unsigned long numa_nr_candidate;
++	unsigned long numa_threshold_ts;
++	unsigned long numa_threshold_nr_candidate;
++	unsigned long numa_threshold;
+ #endif
+ 	/* Fields commonly accessed by the page reclaim scanner */
+ 
+diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.h
+index 7d937adaac0f..ff2c43e8ebac 100644
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -84,6 +84,8 @@ int sysctl_sched_uclamp_handler(struct ctl_table *table, int write,
+ 		void *buffer, size_t *lenp, loff_t *ppos);
+ int sysctl_numa_balancing(struct ctl_table *table, int write, void *buffer,
+ 		size_t *lenp, loff_t *ppos);
++int sysctl_numa_balancing_threshold(struct ctl_table *table, int write, void *buffer,
++		size_t *lenp, loff_t *ppos);
+ int sysctl_schedstats(struct ctl_table *table, int write, void *buffer,
+ 		size_t *lenp, loff_t *ppos);
+ 
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 5dcabc98432f..1cca2c8a3423 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -4285,6 +4285,18 @@ void set_numabalancing_state(bool enabled)
+ }
+ 
+ #ifdef CONFIG_PROC_SYSCTL
++static void reset_memory_tiering(void)
++{
++	struct pglist_data *pgdat;
++
++	for_each_online_pgdat(pgdat) {
++		pgdat->numa_threshold = 0;
++		pgdat->numa_threshold_nr_candidate =
++			node_page_state(pgdat, PGPROMOTE_CANDIDATE);
++		pgdat->numa_threshold_ts = jiffies;
++	}
++}
++
+ int sysctl_numa_balancing(struct ctl_table *table, int write,
+ 			  void *buffer, size_t *lenp, loff_t *ppos)
+ {
+@@ -4301,6 +4313,9 @@ int sysctl_numa_balancing(struct ctl_table *table, int write,
+ 	if (err < 0)
+ 		return err;
+ 	if (write) {
++		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) &&
++		    (state & NUMA_BALANCING_MEMORY_TIERING))
++			reset_memory_tiering();
+ 		sysctl_numa_balancing_mode = state;
+ 		__set_numabalancing_state(state);
+ 	}
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 7912669a2065..daa978d2d70d 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -1423,6 +1423,54 @@ static bool numa_migration_check_rate_limit(struct pglist_data *pgdat,
+ 	return true;
+ }
+ 
++int sysctl_numa_balancing_threshold(struct ctl_table *table, int write, void *buffer,
++		size_t *lenp, loff_t *ppos)
++{
++	int err;
++	struct pglist_data *pgdat;
++
++	if (write && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	err = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
++	if (err < 0 || !write)
++		return err;
++
++	for_each_online_pgdat(pgdat)
++		pgdat->numa_threshold = 0;
++
++	return err;
++}
++
++#define NUMA_MIGRATION_ADJUST_STEPS	16
++
++static void numa_migration_adjust_threshold(struct pglist_data *pgdat,
++					    unsigned long rate_limit,
++					    unsigned long ref_th)
++{
++	unsigned long now = jiffies, last_th_ts, th_period;
++	unsigned long unit_th, th;
++	unsigned long nr_cand, ref_cand, diff_cand;
++
++	th_period = msecs_to_jiffies(sysctl_numa_balancing_scan_period_max);
++	last_th_ts = pgdat->numa_threshold_ts;
++	if (now > last_th_ts + th_period &&
++	    cmpxchg(&pgdat->numa_threshold_ts, last_th_ts, now) == last_th_ts) {
++		ref_cand = rate_limit *
++			sysctl_numa_balancing_scan_period_max / 1000;
++		nr_cand = node_page_state(pgdat, PGPROMOTE_CANDIDATE);
++		diff_cand = nr_cand - pgdat->numa_threshold_nr_candidate;
++		unit_th = ref_th / NUMA_MIGRATION_ADJUST_STEPS;
++		th = pgdat->numa_threshold ? : ref_th;
++		if (diff_cand > ref_cand * 11 / 10)
++			th = max(th - unit_th, unit_th);
++		else if (diff_cand < ref_cand * 9 / 10)
++			th = min(th + unit_th, ref_th);
++		pgdat->numa_threshold_nr_candidate = nr_cand;
++		pgdat->numa_threshold = th;
++	}
++}
++
+ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 				int src_nid, int dst_cpu)
+ {
+@@ -1437,19 +1485,25 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
+ 	    !node_is_toptier(src_nid)) {
+ 		struct pglist_data *pgdat;
+-		unsigned long rate_limit, latency, th;
++		unsigned long rate_limit, latency, th, def_th;
+ 
+ 		pgdat = NODE_DATA(dst_nid);
+-		if (pgdat_free_space_enough(pgdat))
++		if (pgdat_free_space_enough(pgdat)) {
++			/* workload changed, reset hot threshold */
++			pgdat->numa_threshold = 0;
+ 			return true;
++		}
+ 
+-		th = sysctl_numa_balancing_hot_threshold;
++		def_th = sysctl_numa_balancing_hot_threshold;
++		rate_limit =
++			sysctl_numa_balancing_rate_limit << (20 - PAGE_SHIFT);
++		numa_migration_adjust_threshold(pgdat, rate_limit, def_th);
++
++		th = pgdat->numa_threshold ? : def_th;
+ 		latency = numa_hint_fault_latency(page);
+ 		if (latency > th)
+ 			return false;
+ 
+-		rate_limit =
+-			sysctl_numa_balancing_rate_limit << (20 - PAGE_SHIFT);
+ 		return numa_migration_check_rate_limit(pgdat, rate_limit,
+ 						       thp_nr_pages(page));
+ 	}
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index 7be964eb0d13..38892422ffac 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -1816,7 +1816,8 @@ static struct ctl_table kern_table[] = {
+ 		.data		= &sysctl_numa_balancing_hot_threshold,
+ 		.maxlen		= sizeof(unsigned int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec,
++		.proc_handler	= sysctl_numa_balancing_threshold,
++		.extra1		= SYSCTL_ZERO,
+ 	},
+ 	{
+ 		.procname	= "numa_balancing_rate_limit_mbps",
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 1F10DC433FE
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:45:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id EDAE16120F
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:45:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1357948AbhKPBsH (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:48:07 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36061 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1357267AbhKPBlT (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:41:19 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023962"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023962"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:20 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262532"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:15 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 5/6] memory tiering: rate limit NUMA migration throughput
+Date:   Tue, 16 Nov 2021 09:35:21 +0800
+Message-Id: <20211116013522.140575-6-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+In NUMA balancing memory tiering mode, the hot slow memory pages could
+be promoted to the fast memory node via NUMA balancing.  But this
+incurs some overhead too.  So that sometimes the workload performance
+may be hurt.  To avoid too much disturbing to the workload in these
+situations, we should make it possible to rate limit the promotion
+throughput.
+
+So, in this patch, we implement a simple rate limit algorithm as
+follows.  The number of the candidate pages to be promoted to the fast
+memory node via NUMA balancing is counted, if the count exceeds the
+limit specified by the users, the NUMA balancing promotion will be
+stopped until the next second.
+
+A new sysctl knob kernel.numa_balancing_rate_limit_mbps is added for
+the users to specify the limit.
+
+TODO: Add ABI document for new sysctl knob.
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ include/linux/mmzone.h       |  5 +++++
+ include/linux/sched/sysctl.h |  1 +
+ kernel/sched/fair.c          | 29 +++++++++++++++++++++++++++--
+ kernel/sysctl.c              |  8 ++++++++
+ mm/vmstat.c                  |  1 +
+ 5 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+index eda6d2f09d77..f3b044993bc5 100644
+--- a/include/linux/mmzone.h
++++ b/include/linux/mmzone.h
+@@ -213,6 +213,7 @@ enum node_stat_item {
+ #endif
+ #ifdef CONFIG_NUMA_BALANCING
+ 	PGPROMOTE_SUCCESS,	/* promote successfully */
++	PGPROMOTE_CANDIDATE,	/* candidate pages to promote */
+ #endif
+ 	NR_VM_NODE_STAT_ITEMS
+ };
+@@ -902,6 +903,10 @@ typedef struct pglist_data {
+ 	struct deferred_split deferred_split_queue;
+ #endif
+ 
++#ifdef CONFIG_NUMA_BALANCING
++	unsigned long numa_ts;
++	unsigned long numa_nr_candidate;
++#endif
+ 	/* Fields commonly accessed by the page reclaim scanner */
+ 
+ 	/*
+diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.h
+index 0ea43b146aee..7d937adaac0f 100644
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -42,6 +42,7 @@ enum sched_tunable_scaling {
+ #ifdef CONFIG_NUMA_BALANCING
+ extern int sysctl_numa_balancing_mode;
+ extern unsigned int sysctl_numa_balancing_hot_threshold;
++extern unsigned int sysctl_numa_balancing_rate_limit;
+ #else
+ #define sysctl_numa_balancing_mode	0
+ #endif
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 2b78664a5ce2..7912669a2065 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -1028,6 +1028,11 @@ unsigned int sysctl_numa_balancing_scan_delay = 1000;
+ 
+ /* The page with hint page fault latency < threshold in ms is considered hot */
+ unsigned int sysctl_numa_balancing_hot_threshold = 1000;
++/*
++ * Restrict the NUMA migration per second in MB for each target node
++ * if no enough free space in target node
++ */
++unsigned int sysctl_numa_balancing_rate_limit = 65536;
+ 
+ struct numa_group {
+ 	refcount_t refcount;
+@@ -1401,6 +1406,23 @@ static int numa_hint_fault_latency(struct page *page)
+ 	return (time - last_time) & PAGE_ACCESS_TIME_MASK;
+ }
+ 
++static bool numa_migration_check_rate_limit(struct pglist_data *pgdat,
++					    unsigned long rate_limit, int nr)
++{
++	unsigned long nr_candidate;
++	unsigned long now = jiffies, last_ts;
++
++	mod_node_page_state(pgdat, PGPROMOTE_CANDIDATE, nr);
++	nr_candidate = node_page_state(pgdat, PGPROMOTE_CANDIDATE);
++	last_ts = pgdat->numa_ts;
++	if (now > last_ts + HZ &&
++	    cmpxchg(&pgdat->numa_ts, last_ts, now) == last_ts)
++		pgdat->numa_nr_candidate = nr_candidate;
++	if (nr_candidate - pgdat->numa_nr_candidate > rate_limit)
++		return false;
++	return true;
++}
++
+ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 				int src_nid, int dst_cpu)
+ {
+@@ -1415,7 +1437,7 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
+ 	    !node_is_toptier(src_nid)) {
+ 		struct pglist_data *pgdat;
+-		unsigned long latency, th;
++		unsigned long rate_limit, latency, th;
+ 
+ 		pgdat = NODE_DATA(dst_nid);
+ 		if (pgdat_free_space_enough(pgdat))
+@@ -1426,7 +1448,10 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
+ 		if (latency > th)
+ 			return false;
+ 
+-		return true;
++		rate_limit =
++			sysctl_numa_balancing_rate_limit << (20 - PAGE_SHIFT);
++		return numa_migration_check_rate_limit(pgdat, rate_limit,
++						       thp_nr_pages(page));
+ 	}
+ 
+ 	this_cpupid = cpu_pid_to_cpupid(dst_cpu, current->pid);
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index 40432524642a..7be964eb0d13 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -1818,6 +1818,14 @@ static struct ctl_table kern_table[] = {
+ 		.mode		= 0644,
+ 		.proc_handler	= proc_dointvec,
+ 	},
++	{
++		.procname	= "numa_balancing_rate_limit_mbps",
++		.data		= &sysctl_numa_balancing_rate_limit,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++	},
+ #endif /* CONFIG_NUMA_BALANCING */
+ 	{
+ 		.procname	= "sched_rt_period_us",
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index 53a6e92b1efb..787a012de3e2 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -1244,6 +1244,7 @@ const char * const vmstat_text[] = {
+ #endif
+ #ifdef CONFIG_NUMA_BALANCING
+ 	"pgpromote_success",
++	"pgpromote_candidate",
+ #endif
+ 
+ 	/* enum writeback_stat_item counters */
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C8687C43219
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:46:45 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AEAE861A4E
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:46:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1382374AbhKPBtX (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:49:23 -0500
+Received: from mga09.intel.com ([134.134.136.24]:27078 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1348873AbhKPBmR (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:42:17 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="233433765"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="233433765"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:35:57 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262407"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:35:53 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 0/6] NUMA balancing: optimize memory placement for memory tiering system
+Date:   Tue, 16 Nov 2021 09:35:16 +0800
+Message-Id: <20211116013522.140575-1-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+The changes since the last post are as follows,
+
+- Rebased on v5.16-rc1
+
+- Revise error processing for [1/6] (promotion counter) per Yang's comments
+
+- Add sysctl document for [2/6] (optimize page placement)
+
+- Reset threshold adjustment state when disable/enable tiering mode
+
+- Reset threshold when workload transition is detected.
+
+--
+
+With the advent of various new memory types, some machines will have
+multiple types of memory, e.g. DRAM and PMEM (persistent memory).  The
+memory subsystem of these machines can be called memory tiering
+system, because the performance of the different types of memory are
+different.
+
+After commit c221c0b0308f ("device-dax: "Hotplug" persistent memory
+for use like normal RAM"), the PMEM could be used as the
+cost-effective volatile memory in separate NUMA nodes.  In a typical
+memory tiering system, there are CPUs, DRAM and PMEM in each physical
+NUMA node.  The CPUs and the DRAM will be put in one logical node,
+while the PMEM will be put in another (faked) logical node.
+
+To optimize the system overall performance, the hot pages should be
+placed in DRAM node.  To do that, we need to identify the hot pages in
+the PMEM node and migrate them to DRAM node via NUMA migration.
+
+In the original NUMA balancing, there are already a set of existing
+mechanisms to identify the pages recently accessed by the CPUs in a
+node and migrate the pages to the node.  So we can reuse these
+mechanisms to build the mechanisms to optimize the page placement in
+the memory tiering system.  This is implemented in this patchset.
+
+At the other hand, the cold pages should be placed in PMEM node.  So,
+we also need to identify the cold pages in the DRAM node and migrate
+them to PMEM node.
+
+In commit 26aa2d199d6f ("mm/migrate: demote pages during reclaim"), a
+mechanism to demote the cold DRAM pages to PMEM node under memory
+pressure is implemented.  Based on that, the cold DRAM pages can be
+demoted to PMEM node proactively to free some memory space on DRAM
+node to accommodate the promoted hot PMEM pages.  This is implemented
+in this patchset too.
+
+We have tested the solution with the pmbench memory accessing
+benchmark with the 80:20 read/write ratio and the normal access
+address distribution on a 2 socket Intel server with Optane DC
+Persistent Memory Model.  The test results of the base kernel and step
+by step optimizations are as follows,
+
+                Throughput	Promotion      DRAM bandwidth
+		  access/s           MB/s                MB/s
+               -----------     ----------      --------------
+Base		69263986.8			       1830.2
+Patch 2	       135691921.4	    385.6	      11315.9
+Patch 3	       133239016.8	    384.7	      11065.2
+Patch 4	       151310868.9          197.6	      11397.0
+Patch 5	       142311252.8           99.3	       9580.8
+Patch 6	       149044263.9	     65.5	       9922.8
+
+The whole patchset improves the benchmark score up to 115.2%.  The
+basic NUMA balancing based optimization solution (patch 2), the hot
+page selection algorithm (patch 4), and the threshold automatic
+adjustment algorithms (patch 6) improves the performance or reduce the
+overhead (promotion MB/s) greatly.
+
+Changelog:
+
+v10:
+
+- Rebased on v5.16-rc1
+
+- Revise error processing for [1/6] (promotion counter) per Yang's comments
+
+- Add sysctl document for [2/6] (optimize page placement)
+
+- Reset threshold adjustment state when disable/enable tiering mode
+
+- Reset threshold when workload transition is detected.
+
+v9:
+
+- Rebased on v5.15-rc4
+
+- Make "add promotion counter" the first patch per Yang's comments
+
+v8:
+
+- Rebased on v5.15-rc1
+
+- Make user-specified threshold take effect sooner
+
+v7:
+
+- Rebased on the mmots tree of 2021-07-15.
+
+- Some minor fixes.
+
+v6:
+
+- Rebased on the latest page demotion patchset. (which bases on v5.11)
+
+v5:
+
+- Rebased on the latest page demotion patchset. (which bases on v5.10)
+
+v4:
+
+- Rebased on the latest page demotion patchset. (which bases on v5.9-rc6)
+
+- Add page promotion counter.
+
+v3:
+
+- Move the rate limit control as late as possible per Mel Gorman's
+  comments.
+
+- Revise the hot page selection implementation to store page scan time
+  in struct page.
+
+- Code cleanup.
+
+- Rebased on the latest page demotion patchset.
+
+v2:
+
+- Addressed comments for V1.
+
+- Rebased on v5.5.
+
+Best Regards,
+Huang, Ying
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 16CF1C433F5
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:48:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 046C861265
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:48:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1358627AbhKPBvm (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:51:42 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36068 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353699AbhKPBjS (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:39:18 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023949"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023949"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:19 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262524"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:07 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 3/6] memory tiering: skip to scan fast memory
+Date:   Tue, 16 Nov 2021 09:35:19 +0800
+Message-Id: <20211116013522.140575-4-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+If the NUMA balancing isn't used to optimize the page placement among
+sockets but only among memory types, the hot pages in the fast memory
+node couldn't be migrated (promoted) to anywhere.  So it's unnecessary
+to scan the pages in the fast memory node via changing their PTE/PMD
+mapping to be PROT_NONE.  So that the page faults could be avoided
+too.
+
+In the test, if only the memory tiering NUMA balancing mode is enabled, the
+number of the NUMA balancing hint faults for the DRAM node is reduced to
+almost 0 with the patch.  While the benchmark score doesn't change
+visibly.
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Suggested-by: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ mm/huge_memory.c | 30 +++++++++++++++++++++---------
+ mm/mprotect.c    | 13 ++++++++++++-
+ 2 files changed, 33 insertions(+), 10 deletions(-)
+
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index e5483347291c..cab8048eb779 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -34,6 +34,7 @@
+ #include <linux/oom.h>
+ #include <linux/numa.h>
+ #include <linux/page_owner.h>
++#include <linux/sched/sysctl.h>
+ 
+ #include <asm/tlb.h>
+ #include <asm/pgalloc.h>
+@@ -1766,17 +1767,28 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 	}
+ #endif
+ 
+-	/*
+-	 * Avoid trapping faults against the zero page. The read-only
+-	 * data is likely to be read-cached on the local CPU and
+-	 * local/remote hits to the zero page are not interesting.
+-	 */
+-	if (prot_numa && is_huge_zero_pmd(*pmd))
+-		goto unlock;
++	if (prot_numa) {
++		struct page *page;
++		/*
++		 * Avoid trapping faults against the zero page. The read-only
++		 * data is likely to be read-cached on the local CPU and
++		 * local/remote hits to the zero page are not interesting.
++		 */
++		if (is_huge_zero_pmd(*pmd))
++			goto unlock;
+ 
+-	if (prot_numa && pmd_protnone(*pmd))
+-		goto unlock;
++		if (pmd_protnone(*pmd))
++			goto unlock;
+ 
++		page = pmd_page(*pmd);
++		/*
++		 * Skip scanning top tier node if normal numa
++		 * balancing is disabled
++		 */
++		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
++		    node_is_toptier(page_to_nid(page)))
++			goto unlock;
++	}
+ 	/*
+ 	 * In case prot_numa, we are under mmap_read_lock(mm). It's critical
+ 	 * to not clear pmd intermittently to avoid race with MADV_DONTNEED
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index e552f5e0ccbd..ddc24ca52b12 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -29,6 +29,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/mm_inline.h>
+ #include <linux/pgtable.h>
++#include <linux/sched/sysctl.h>
+ #include <asm/cacheflush.h>
+ #include <asm/mmu_context.h>
+ #include <asm/tlbflush.h>
+@@ -83,6 +84,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 			 */
+ 			if (prot_numa) {
+ 				struct page *page;
++				int nid;
+ 
+ 				/* Avoid TLB flush if possible */
+ 				if (pte_protnone(oldpte))
+@@ -109,7 +111,16 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 				 * Don't mess with PTEs if page is already on the node
+ 				 * a single-threaded process is running on.
+ 				 */
+-				if (target_node == page_to_nid(page))
++				nid = page_to_nid(page);
++				if (target_node == nid)
++					continue;
++
++				/*
++				 * Skip scanning top tier node if normal numa
++				 * balancing is disabled
++				 */
++				if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
++				    node_is_toptier(nid))
+ 					continue;
+ 			}
+ 
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EBE1DC433F5
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:51:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C709961A4E
+	for <linux-kernel@archiver.kernel.org>; Tue, 16 Nov 2021 01:51:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1382486AbhKPBwK (ORCPT
+        <rfc822;linux-kernel@archiver.kernel.org>);
+        Mon, 15 Nov 2021 20:52:10 -0500
+Received: from mga07.intel.com ([134.134.136.100]:36061 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1351970AbhKPBjS (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Mon, 15 Nov 2021 20:39:18 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10169"; a="297023946"
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="297023946"
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:18 -0800
+X-IronPort-AV: E=Sophos;i="5.87,237,1631602800"; 
+   d="scan'208";a="454262519"
+Received: from yhuang6-desk2.sh.intel.com ([10.239.159.101])
+  by orsmga006-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 15 Nov 2021 17:36:03 -0800
+From:   Huang Ying <ying.huang@intel.com>
+To:     Peter Zijlstra <peterz@infradead.org>, Mel Gorman <mgorman@suse.de>
+Cc:     linux-mm@kvack.org, linux-kernel@vger.kernel.org,
+        Feng Tang <feng.tang@intel.com>,
+        Huang Ying <ying.huang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Zi Yan <ziy@nvidia.com>,
+        Wei Xu <weixugc@google.com>, osalvador <osalvador@suse.de>,
+        Shakeel Butt <shakeelb@google.com>
+Subject: [PATCH -V10 2/6] NUMA balancing: optimize page placement for memory tiering system
+Date:   Tue, 16 Nov 2021 09:35:18 +0800
+Message-Id: <20211116013522.140575-3-ying.huang@intel.com>
+X-Mailer: git-send-email 2.30.2
+In-Reply-To: <20211116013522.140575-1-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+With the advent of various new memory types, some machines will have
+multiple types of memory, e.g. DRAM and PMEM (persistent memory).  The
+memory subsystem of these machines can be called memory tiering
+system, because the performance of the different types of memory are
+usually different.
+
+In such system, because of the memory accessing pattern changing etc,
+some pages in the slow memory may become hot globally.  So in this
+patch, the NUMA balancing mechanism is enhanced to optimize the page
+placement among the different memory types according to hot/cold
+dynamically.
+
+In a typical memory tiering system, there are CPUs, fast memory and
+slow memory in each physical NUMA node.  The CPUs and the fast memory
+will be put in one logical node (called fast memory node), while the
+slow memory will be put in another (faked) logical node (called slow
+memory node).  That is, the fast memory is regarded as local while the
+slow memory is regarded as remote.  So it's possible for the recently
+accessed pages in the slow memory node to be promoted to the fast
+memory node via the existing NUMA balancing mechanism.
+
+The original NUMA balancing mechanism will stop to migrate pages if the free
+memory of the target node will become below the high watermark.  This
+is a reasonable policy if there's only one memory type.  But this
+makes the original NUMA balancing mechanism almost not work to optimize page
+placement among different memory types.  Details are as follows.
+
+It's the common cases that the working-set size of the workload is
+larger than the size of the fast memory nodes.  Otherwise, it's
+unnecessary to use the slow memory at all.  So in the common cases,
+there are almost always no enough free pages in the fast memory nodes,
+so that the globally hot pages in the slow memory node cannot be
+promoted to the fast memory node.  To solve the issue, we have 2
+choices as follows,
+
+a. Ignore the free pages watermark checking when promoting hot pages
+   from the slow memory node to the fast memory node.  This will
+   create some memory pressure in the fast memory node, thus trigger
+   the memory reclaiming.  So that, the cold pages in the fast memory
+   node will be demoted to the slow memory node.
+
+b. Make kswapd of the fast memory node to reclaim pages until the free
+   pages are a little more (about 10MB) than the high watermark.  Then,
+   if the free pages of the fast memory node reaches high watermark, and
+   some hot pages need to be promoted, kswapd of the fast memory node
+   will be waken up to demote some cold pages in the fast memory node to
+   the slow memory node.  This will free some extra space in the fast
+   memory node, so the hot pages in the slow memory node can be
+   promoted to the fast memory node.
+
+The choice "a" will create the memory pressure in the fast memory
+node.  If the memory pressure of the workload is high, the memory
+pressure may become so high that the memory allocation latency of the
+workload is influenced, e.g. the direct reclaiming may be triggered.
+
+The choice "b" works much better at this aspect.  If the memory
+pressure of the workload is high, the hot pages promotion will stop
+earlier because its allocation watermark is higher than that of the
+normal memory allocation.  So in this patch, choice "b" is
+implemented.
+
+In addition to the original page placement optimization among sockets,
+the NUMA balancing mechanism is extended to be used to optimize page
+placement according to hot/cold among different memory types.  So the
+sysctl user space interface (numa_balancing) is extended in a backward
+compatible way as follow, so that the users can enable/disable these
+functionality individually.
+
+The sysctl is converted from a Boolean value to a bits field.  The
+definition of the flags is,
+
+- 0x0: NUMA_BALANCING_DISABLED
+- 0x1: NUMA_BALANCING_NORMAL
+- 0x2: NUMA_BALANCING_MEMORY_TIERING
+
+Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Michal Hocko <mhocko@suse.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Yang Shi <shy828301@gmail.com>
+Cc: Zi Yan <ziy@nvidia.com>
+Cc: Wei Xu <weixugc@google.com>
+Cc: osalvador <osalvador@suse.de>
+Cc: Shakeel Butt <shakeelb@google.com>
+Cc: linux-kernel@vger.kernel.org
+Cc: linux-mm@kvack.org
+---
+ Documentation/admin-guide/sysctl/kernel.rst | 29 ++++++++++++++-------
+ include/linux/sched/sysctl.h                | 10 +++++++
+ kernel/sched/core.c                         | 21 ++++++++++++---
+ kernel/sysctl.c                             |  3 ++-
+ mm/migrate.c                                | 19 ++++++++++++--
+ mm/vmscan.c                                 | 16 ++++++++++++
+ 6 files changed, 82 insertions(+), 16 deletions(-)
+
+diff --git a/Documentation/admin-guide/sysctl/kernel.rst b/Documentation/admin-guide/sysctl/kernel.rst
+index 426162009ce9..1974a559c10b 100644
+--- a/Documentation/admin-guide/sysctl/kernel.rst
++++ b/Documentation/admin-guide/sysctl/kernel.rst
+@@ -595,16 +595,23 @@ Documentation/admin-guide/kernel-parameters.rst).
+ numa_balancing
+ ==============
+ 
+-Enables/disables automatic page fault based NUMA memory
+-balancing. Memory is moved automatically to nodes
+-that access it often.
++Enables/disables and configure automatic page fault based NUMA memory
++balancing.  Memory is moved automatically to nodes that access it
++often.  The value to set can be the result to OR the following,
+ 
+-Enables/disables automatic NUMA memory balancing. On NUMA machines, there
+-is a performance penalty if remote memory is accessed by a CPU. When this
+-feature is enabled the kernel samples what task thread is accessing memory
+-by periodically unmapping pages and later trapping a page fault. At the
+-time of the page fault, it is determined if the data being accessed should
+-be migrated to a local memory node.
++= =================================
++0x0 NUMA_BALANCING_DISABLED
++0x1 NUMA_BALANCING_NORMAL
++0x2 NUMA_BALANCING_MEMORY_TIERING
++= =================================
++
++Or NUMA_BALANCING_NORMAL to optimize page placement among different
++NUMA nodes to reduce remote accessing.  On NUMA machines, there is a
++performance penalty if remote memory is accessed by a CPU. When this
++feature is enabled the kernel samples what task thread is accessing
++memory by periodically unmapping pages and later trapping a page
++fault. At the time of the page fault, it is determined if the data
++being accessed should be migrated to a local memory node.
+ 
+ The unmapping of pages and trapping faults incur additional overhead that
+ ideally is offset by improved memory locality but there is no universal
+@@ -615,6 +622,10 @@ faults may be controlled by the `numa_balancing_scan_period_min_ms,
+ numa_balancing_scan_delay_ms, numa_balancing_scan_period_max_ms,
+ numa_balancing_scan_size_mb`_, and numa_balancing_settle_count sysctls.
+ 
++Or NUMA_BALANCING_MEMORY_TIERING to optimize page placement among
++different types of memory (represented as different NUMA nodes) to
++place the hot pages in the fast memory.  This is implemented based on
++unmapping and page fault too.
+ 
+ numa_balancing_scan_period_min_ms, numa_balancing_scan_delay_ms, numa_balancing_scan_period_max_ms, numa_balancing_scan_size_mb
+ ===============================================================================================================================
+diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.h
+index 304f431178fd..bc54c1d75d6d 100644
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -35,6 +35,16 @@ enum sched_tunable_scaling {
+ 	SCHED_TUNABLESCALING_END,
+ };
+ 
++#define NUMA_BALANCING_DISABLED		0x0
++#define NUMA_BALANCING_NORMAL		0x1
++#define NUMA_BALANCING_MEMORY_TIERING	0x2
++
++#ifdef CONFIG_NUMA_BALANCING
++extern int sysctl_numa_balancing_mode;
++#else
++#define sysctl_numa_balancing_mode	0
++#endif
++
+ /*
+  *  control realtime throttling:
+  *
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 3c9b0fda64ac..5dcabc98432f 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -4265,7 +4265,9 @@ DEFINE_STATIC_KEY_FALSE(sched_numa_balancing);
+ 
+ #ifdef CONFIG_NUMA_BALANCING
+ 
+-void set_numabalancing_state(bool enabled)
++int sysctl_numa_balancing_mode;
++
++static void __set_numabalancing_state(bool enabled)
+ {
+ 	if (enabled)
+ 		static_branch_enable(&sched_numa_balancing);
+@@ -4273,13 +4275,22 @@ void set_numabalancing_state(bool enabled)
+ 		static_branch_disable(&sched_numa_balancing);
+ }
+ 
++void set_numabalancing_state(bool enabled)
++{
++	if (enabled)
++		sysctl_numa_balancing_mode = NUMA_BALANCING_NORMAL;
++	else
++		sysctl_numa_balancing_mode = NUMA_BALANCING_DISABLED;
++	__set_numabalancing_state(enabled);
++}
++
+ #ifdef CONFIG_PROC_SYSCTL
+ int sysctl_numa_balancing(struct ctl_table *table, int write,
+ 			  void *buffer, size_t *lenp, loff_t *ppos)
+ {
+ 	struct ctl_table t;
+ 	int err;
+-	int state = static_branch_likely(&sched_numa_balancing);
++	int state = sysctl_numa_balancing_mode;
+ 
+ 	if (write && !capable(CAP_SYS_ADMIN))
+ 		return -EPERM;
+@@ -4289,8 +4300,10 @@ int sysctl_numa_balancing(struct ctl_table *table, int write,
+ 	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+ 	if (err < 0)
+ 		return err;
+-	if (write)
+-		set_numabalancing_state(state);
++	if (write) {
++		sysctl_numa_balancing_mode = state;
++		__set_numabalancing_state(state);
++	}
+ 	return err;
+ }
+ #endif
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index 083be6af29d7..a1be94ea80ba 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -115,6 +115,7 @@ static int sixty = 60;
+ 
+ static int __maybe_unused neg_one = -1;
+ static int __maybe_unused two = 2;
++static int __maybe_unused three = 3;
+ static int __maybe_unused four = 4;
+ static unsigned long zero_ul;
+ static unsigned long one_ul = 1;
+@@ -1808,7 +1809,7 @@ static struct ctl_table kern_table[] = {
+ 		.mode		= 0644,
+ 		.proc_handler	= sysctl_numa_balancing,
+ 		.extra1		= SYSCTL_ZERO,
+-		.extra2		= SYSCTL_ONE,
++		.extra2		= &three,
+ 	},
+ #endif /* CONFIG_NUMA_BALANCING */
+ 	{
+diff --git a/mm/migrate.c b/mm/migrate.c
+index b7c27abb0e5c..286c84c014dd 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -50,6 +50,7 @@
+ #include <linux/ptrace.h>
+ #include <linux/oom.h>
+ #include <linux/memory.h>
++#include <linux/sched/sysctl.h>
+ 
+ #include <asm/tlbflush.h>
+ 
+@@ -2103,16 +2104,30 @@ static int numamigrate_isolate_page(pg_data_t *pgdat, struct page *page)
+ {
+ 	int page_lru;
+ 	int nr_pages = thp_nr_pages(page);
++	int order = compound_order(page);
+ 
+-	VM_BUG_ON_PAGE(compound_order(page) && !PageTransHuge(page), page);
++	VM_BUG_ON_PAGE(order && !PageTransHuge(page), page);
+ 
+ 	/* Do not migrate THP mapped by multiple processes */
+ 	if (PageTransHuge(page) && total_mapcount(page) > 1)
+ 		return 0;
+ 
+ 	/* Avoid migrating to a node that is nearly full */
+-	if (!migrate_balanced_pgdat(pgdat, nr_pages))
++	if (!migrate_balanced_pgdat(pgdat, nr_pages)) {
++		int z;
++
++		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) ||
++		    !numa_demotion_enabled)
++			return 0;
++		if (next_demotion_node(pgdat->node_id) == NUMA_NO_NODE)
++			return 0;
++		for (z = pgdat->nr_zones - 1; z >= 0; z--) {
++			if (populated_zone(pgdat->node_zones + z))
++				break;
++		}
++		wakeup_kswapd(pgdat->node_zones + z, 0, order, ZONE_MOVABLE);
+ 		return 0;
++	}
+ 
+ 	if (isolate_lru_page(page))
+ 		return 0;
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+index fb9584641ac7..8ec955404bd1 100644
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -56,6 +56,7 @@
+ 
+ #include <linux/swapops.h>
+ #include <linux/balloon_compaction.h>
++#include <linux/sched/sysctl.h>
+ 
+ #include "internal.h"
+ 
+@@ -3908,6 +3909,12 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
+ 	return false;
+ }
+ 
++/*
++ * Keep the free pages on fast memory node a little more than the high
++ * watermark to accommodate the promoted pages.
++ */
++#define NUMA_BALANCING_PROMOTE_WATERMARK	(10UL * 1024 * 1024 >> PAGE_SHIFT)
++
+ /*
+  * Returns true if there is an eligible zone balanced for the request order
+  * and highest_zoneidx
+@@ -3929,6 +3936,15 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
+ 			continue;
+ 
+ 		mark = high_wmark_pages(zone);
++		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
++		    numa_demotion_enabled &&
++		    next_demotion_node(pgdat->node_id) != NUMA_NO_NODE) {
++			unsigned long promote_mark;
++
++			promote_mark = min(NUMA_BALANCING_PROMOTE_WATERMARK,
++					   pgdat->node_present_pages >> 6);
++			mark += promote_mark;
++		}
+ 		if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
+ 			return true;
+ 	}
+-- 
+2.30.2
+
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B6FC9C433F5
+	for <linux-kernel@archiver.kernel.org>; Thu, 18 Nov 2021 00:15:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9E5A061B98
+	for <linux-kernel@archiver.kernel.org>; Thu, 18 Nov 2021 00:15:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S241863AbhKRASv (ORCPT <rfc822;linux-kernel@archiver.kernel.org>);
+        Wed, 17 Nov 2021 19:18:51 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:49636 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S241849AbhKRASp (ORCPT
+        <rfc822;linux-kernel@vger.kernel.org>);
+        Wed, 17 Nov 2021 19:18:45 -0500
+Received: from mail-ed1-x533.google.com (mail-ed1-x533.google.com [IPv6:2a00:1450:4864:20::533])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id C4D78C061570
+        for <linux-kernel@vger.kernel.org>; Wed, 17 Nov 2021 16:15:45 -0800 (PST)
+Received: by mail-ed1-x533.google.com with SMTP id g14so18725690edb.8
+        for <linux-kernel@vger.kernel.org>; Wed, 17 Nov 2021 16:15:45 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20210112;
+        h=mime-version:references:in-reply-to:from:date:message-id:subject:to
+         :cc;
+        bh=PPzDrm8hw/ujJmiUKHH7CMVzIaJ4uv6KjA6rPPfDBlA=;
+        b=MYjaC48HJMlTwAZ5qRLVZREpdOvi98kfTgr63YfwurOcOCrjl9nJYQY/icYELIUxrA
+         JckcwZRrBPvvLA2osY4mkl4IFR21i3IrIi93OetLdhRQbXGnvSiOw0KBlPyPlGLcm62M
+         EF+WyaDrV6hZhmnG5QRvaGd0Ez6fk8j7gaZrvhrKDlD8+q3sNaNBDklXm1S/qD2ZO9Zr
+         ZXDEyEn4vI7w2sN/7X0GF6fZEHK9VXv0kxNv/4/F7efW5JAVBadzz1tbCr4uKZHiIjza
+         jouvD+XsEWjw9sis7M/LW7FUAAxRuIlEozUxeVWxxGqQ8bvvV0SH9eCibsIX/M2z3Xvk
+         Kz8Q==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20210112;
+        h=x-gm-message-state:mime-version:references:in-reply-to:from:date
+         :message-id:subject:to:cc;
+        bh=PPzDrm8hw/ujJmiUKHH7CMVzIaJ4uv6KjA6rPPfDBlA=;
+        b=l6e8uSDecDra2ArFusZ2j509usvZakYthW/kNg70KYWd7N3frk2+AjUs+lJBcP205q
+         bjTW1whtMh1qNxNWKH2X20WwjEq64Vy9A+wCPggWU0AFtHDLUMaQl/jzzqxsPvAoda0P
+         cdpIC75OCbW965XDvoOiVrcPzrMFK85BEVAPxK2DJmq8DH77KkKilnSyg3Pz2HNugMes
+         A6LwixG0sL9zpZPUCE0aDrxpTPxpRibuZjUl/hw2lZYgykFeFmKz87zy3MCYgC20OIQ9
+         oIPpD5hW2Vu8eTZe1b+CWhhUXt9VliTKkPTVYh8HgInhJmZ1InKxkcs2XX8GZhGmBI4j
+         CdUA==
+X-Gm-Message-State: AOAM5317NWtYDztLBaCrMy0kN7fYclDNDUwWTvdW/OyYP64LlH9Cw/U7
+        0qDMlx71zpXrMoZv1QPwuDbnpUGk2NBvsSvuv91cyBlBf4s=
+X-Google-Smtp-Source: ABdhPJzX2jweD0mYj8O2e9J4t8sqUX9NjEWWi4n12PZ/vxHqcZkNTop10a1J0vwbn/VBUOa6nTaTtK26vO6eZr3EstY=
+X-Received: by 2002:a05:6402:2926:: with SMTP id ee38mr4415019edb.71.1637194544403;
+ Wed, 17 Nov 2021 16:15:44 -0800 (PST)
+MIME-Version: 1.0
+References: <20211116013522.140575-1-ying.huang@intel.com> <20211116013522.140575-2-ying.huang@intel.com>
+In-Reply-To: <20211116013522.140575-2-ying.huang@intel.com>
+From:   Yang Shi <shy828301@gmail.com>
+Date:   Wed, 17 Nov 2021 16:15:32 -0800
+Message-ID: <CAHbLzkoa_YoNUFHoEd41eXDi57XdcKJFT9zH1KJGSMPE7OB5yw@mail.gmail.com>
+Subject: Re: [PATCH -V10 1/6] NUMA Balancing: add page promotion counter
+To:     Huang Ying <ying.huang@intel.com>
+Cc:     Peter Zijlstra <peterz@infradead.org>,
+        Mel Gorman <mgorman@suse.de>, Linux MM <linux-mm@kvack.org>,
+        Linux Kernel Mailing List <linux-kernel@vger.kernel.org>,
+        Feng Tang <feng.tang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Zi Yan <ziy@nvidia.com>, Wei Xu <weixugc@google.com>,
+        osalvador <osalvador@suse.de>, Shakeel Butt <shakeelb@google.com>
+Content-Type: text/plain; charset="UTF-8"
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+On Mon, Nov 15, 2021 at 5:36 PM Huang Ying <ying.huang@intel.com> wrote:
+>
+> In a system with multiple memory types, e.g. DRAM and PMEM, the CPU
+> and DRAM in one socket will be put in one NUMA node as before, while
+> the PMEM will be put in another NUMA node as described in the
+> description of the commit c221c0b0308f ("device-dax: "Hotplug"
+> persistent memory for use like normal RAM").  So, the NUMA balancing
+> mechanism will identify all PMEM accesses as remote access and try to
+> promote the PMEM pages to DRAM.
+>
+> To distinguish the number of the inter-type promoted pages from that
+> of the inter-socket migrated pages.  A new vmstat count is added.  The
+> counter is per-node (count in the target node).  So this can be used
+> to identify promotion imbalance among the NUMA nodes.
+
+Reviewed-by: Yang Shi <shy828301@gmail.com>
+
+>
+> Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+> Cc: Andrew Morton <akpm@linux-foundation.org>
+> Cc: Michal Hocko <mhocko@suse.com>
+> Cc: Rik van Riel <riel@surriel.com>
+> Cc: Mel Gorman <mgorman@suse.de>
+> Cc: Peter Zijlstra <peterz@infradead.org>
+> Cc: Dave Hansen <dave.hansen@linux.intel.com>
+> Cc: Yang Shi <shy828301@gmail.com>
+> Cc: Zi Yan <ziy@nvidia.com>
+> Cc: Wei Xu <weixugc@google.com>
+> Cc: osalvador <osalvador@suse.de>
+> Cc: Shakeel Butt <shakeelb@google.com>
+> Cc: linux-kernel@vger.kernel.org
+> Cc: linux-mm@kvack.org
+> ---
+>  include/linux/mmzone.h |  3 +++
+>  include/linux/node.h   |  5 +++++
+>  mm/migrate.c           | 13 ++++++++++---
+>  mm/vmstat.c            |  3 +++
+>  4 files changed, 21 insertions(+), 3 deletions(-)
+>
+> diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+> index 58e744b78c2c..eda6d2f09d77 100644
+> --- a/include/linux/mmzone.h
+> +++ b/include/linux/mmzone.h
+> @@ -210,6 +210,9 @@ enum node_stat_item {
+>         NR_PAGETABLE,           /* used for pagetables */
+>  #ifdef CONFIG_SWAP
+>         NR_SWAPCACHE,
+> +#endif
+> +#ifdef CONFIG_NUMA_BALANCING
+> +       PGPROMOTE_SUCCESS,      /* promote successfully */
+>  #endif
+>         NR_VM_NODE_STAT_ITEMS
+>  };
+> diff --git a/include/linux/node.h b/include/linux/node.h
+> index bb21fd631b16..81bbf1c0afd3 100644
+> --- a/include/linux/node.h
+> +++ b/include/linux/node.h
+> @@ -181,4 +181,9 @@ static inline void register_hugetlbfs_with_node(node_registration_func_t reg,
+>
+>  #define to_node(device) container_of(device, struct node, dev)
+>
+> +static inline bool node_is_toptier(int node)
+> +{
+> +       return node_state(node, N_CPU);
+> +}
+> +
+>  #endif /* _LINUX_NODE_H_ */
+> diff --git a/mm/migrate.c b/mm/migrate.c
+> index cf25b00f03c8..b7c27abb0e5c 100644
+> --- a/mm/migrate.c
+> +++ b/mm/migrate.c
+> @@ -2141,6 +2141,7 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+>         pg_data_t *pgdat = NODE_DATA(node);
+>         int isolated;
+>         int nr_remaining;
+> +       int nr_succeeded;
+>         LIST_HEAD(migratepages);
+>         new_page_t *new;
+>         bool compound;
+> @@ -2179,7 +2180,8 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+>
+>         list_add(&page->lru, &migratepages);
+>         nr_remaining = migrate_pages(&migratepages, *new, NULL, node,
+> -                                    MIGRATE_ASYNC, MR_NUMA_MISPLACED, NULL);
+> +                                    MIGRATE_ASYNC, MR_NUMA_MISPLACED,
+> +                                    &nr_succeeded);
+>         if (nr_remaining) {
+>                 if (!list_empty(&migratepages)) {
+>                         list_del(&page->lru);
+> @@ -2188,8 +2190,13 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+>                         putback_lru_page(page);
+>                 }
+>                 isolated = 0;
+> -       } else
+> -               count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_pages);
+> +       }
+> +       if (nr_succeeded) {
+> +               count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_succeeded);
+> +               if (!node_is_toptier(page_to_nid(page)) && node_is_toptier(node))
+> +                       mod_node_page_state(NODE_DATA(node), PGPROMOTE_SUCCESS,
+> +                                           nr_succeeded);
+> +       }
+>         BUG_ON(!list_empty(&migratepages));
+>         return isolated;
+>
+> diff --git a/mm/vmstat.c b/mm/vmstat.c
+> index d701c335628c..53a6e92b1efb 100644
+> --- a/mm/vmstat.c
+> +++ b/mm/vmstat.c
+> @@ -1242,6 +1242,9 @@ const char * const vmstat_text[] = {
+>  #ifdef CONFIG_SWAP
+>         "nr_swapcached",
+>  #endif
+> +#ifdef CONFIG_NUMA_BALANCING
+> +       "pgpromote_success",
+> +#endif
+>
+>         /* enum writeback_stat_item counters */
+>         "nr_dirty_threshold",
+> --
+> 2.30.2
+>
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id AD4CAC433EF
+	for <linux-kernel@archiver.kernel.org>; Thu, 18 Nov 2021 15:01:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 85FBE61A3D
+	for <linux-kernel@archiver.kernel.org>; Thu, 18 Nov 2021 15:01:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231434AbhKRPEj (ORCPT <rfc822;linux-kernel@archiver.kernel.org>);
+        Thu, 18 Nov 2021 10:04:39 -0500
+Received: from mail-sn1anam02on2043.outbound.protection.outlook.com ([40.107.96.43]:18933
+        "EHLO NAM02-SN1-obe.outbound.protection.outlook.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S231215AbhKRPEg (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Thu, 18 Nov 2021 10:04:36 -0500
+ARC-Seal: i=1; a=rsa-sha256; s=arcselector9901; d=microsoft.com; cv=none;
+ b=WPkgDh5T0kfmN12vIUhGjLtKFX4Kgj4JVaQ43ueUA0OJxwUlWY+wpTMigc3e+Yz9JaVlfZwdhTwZwnd3GPl8QM2Y+n6p3xYgltAOcUOKnaOZJZoTzvoy6/mZCFGa3pPMAkV29H1HW5XcykPaL7SOt9C59RrK7hS5mlNG+TDmc5gruYKXvMcFNN+DvvQycQuDmPbDpHxOMGSqH+lVKI72hsI5gMQhpc6FKJWu2Q8YFwvnsmXbAotJiG0OCubjpUP/dy+3IpOzL4d562eWxJqga2tAyr01xaYCQuizKZvbe7Us/AfZYAZ3+9icXdrYAnGxerRN8qEfTEp78yqb2y9yJQ==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=microsoft.com;
+ s=arcselector9901;
+ h=From:Date:Subject:Message-ID:Content-Type:MIME-Version:X-MS-Exchange-AntiSpam-MessageData-ChunkCount:X-MS-Exchange-AntiSpam-MessageData-0:X-MS-Exchange-AntiSpam-MessageData-1;
+ bh=fhwq1c0Ub3gkhCsCGjhhB8OkpaCrbGxRDk/Si1+2520=;
+ b=oCRIdCaKdTENpJLuebogvqvG56AQ88V0Eqi32MAVLgSBLo7JfyCOGBm9pq42cMMC8LZAQzJ9ztaLJQhZLyYqMUYUWSxQ/1qQ9CmPjFhDV2kaTHXJSNznNuIe59o2cPNFZJxjdeTwnuNAQch1wpmCkwChlITDHtjsp1tX7tkKdICAoAJXxwbMs8DMU0ZsSwybgZNcTsCxuLBSBRwRmdCb5n+tuBoe54a8XQMhEf6zSKVdBNEbJOAbmpLhiowGYdn+xcSpdZ5q5DaOIROSTzu1603sRarr7rplbwV5uF3aKRWTCbxdRpdr6fR+6/lBBRaXH+++mc3HbOz2lus/G2RsBQ==
+ARC-Authentication-Results: i=1; mx.microsoft.com 1; spf=pass
+ smtp.mailfrom=nvidia.com; dmarc=pass action=none header.from=nvidia.com;
+ dkim=pass header.d=nvidia.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=Nvidia.com;
+ s=selector2;
+ h=From:Date:Subject:Message-ID:Content-Type:MIME-Version:X-MS-Exchange-SenderADCheck;
+ bh=fhwq1c0Ub3gkhCsCGjhhB8OkpaCrbGxRDk/Si1+2520=;
+ b=U4IvNMtnMWReacmxEj+ZmnJne4ODuPNQGLHoIZPmhAybA/KE5hInpgA3+U25mVMMig0ehk1i5g5oh93+zkt7WX/vBRif8RPKeyhAwtXmH14lI+P5H4m4/I+ayYVjXSH8HxwIPQO/M5tsrrkbVd3vCUwVvjMX2FQ4q6p6zKDnFFiWuejnszhNe24hKZOCRoYyPTLjIqGsh8mfOvo4ioRH5uCNorT8uwj/OFV67tz2Z5fojHJF54p0DMFXLKeAp/iNPi2/b2drn6AUuEf86aFwa9gaRF19hqmKTnXuaycJM7rKH9vB/QN3xxcWusrlk25qfHk79sCS8/qi8cwOcpZhMw==
+Authentication-Results: dkim=none (message not signed)
+ header.d=none;dmarc=none action=none header.from=nvidia.com;
+Received: from DM6PR12MB3819.namprd12.prod.outlook.com (2603:10b6:5:1c6::20)
+ by DM6PR12MB4893.namprd12.prod.outlook.com (2603:10b6:5:1bd::19) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.4713.22; Thu, 18 Nov
+ 2021 15:01:34 +0000
+Received: from DM6PR12MB3819.namprd12.prod.outlook.com
+ ([fe80::8dfd:f3e4:3935:2207]) by DM6PR12MB3819.namprd12.prod.outlook.com
+ ([fe80::8dfd:f3e4:3935:2207%7]) with mapi id 15.20.4690.027; Thu, 18 Nov 2021
+ 15:01:34 +0000
+From:   Zi Yan <ziy@nvidia.com>
+To:     Huang Ying <ying.huang@intel.com>
+Cc:     Peter Zijlstra <peterz@infradead.org>,
+        Mel Gorman <mgorman@suse.de>, linux-mm@kvack.org,
+        linux-kernel@vger.kernel.org, Feng Tang <feng.tang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Michal Hocko <mhocko@suse.com>,
+        Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Wei Xu <weixugc@google.com>,
+        osalvador <osalvador@suse.de>, Shakeel Butt <shakeelb@google.com>
+Subject: Re: [PATCH -V10 2/6] NUMA balancing: optimize page placement for memory tiering system
+Date:   Thu, 18 Nov 2021 10:01:26 -0500
+X-Mailer: MailMate (1.14r5846)
+Message-ID: <C9EB54B4-AA86-4473-AE04-95E3CC6F6E94@nvidia.com>
+In-Reply-To: <20211116013522.140575-3-ying.huang@intel.com>
+References: <20211116013522.140575-1-ying.huang@intel.com>
+ <20211116013522.140575-3-ying.huang@intel.com>
+Content-Type: multipart/signed;
+ boundary="=_MailMate_D82A1751-6FD0-4576-B144-3B93524ACFDA_=";
+ micalg=pgp-sha512; protocol="application/pgp-signature"
+X-ClientProxiedBy: MN2PR04CA0006.namprd04.prod.outlook.com
+ (2603:10b6:208:d4::19) To DM6PR12MB3819.namprd12.prod.outlook.com
+ (2603:10b6:5:1c6::20)
+MIME-Version: 1.0
+Received: from [10.2.52.6] (216.228.112.21) by MN2PR04CA0006.namprd04.prod.outlook.com (2603:10b6:208:d4::19) with Microsoft SMTP Server (version=TLS1_2, cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.4713.22 via Frontend Transport; Thu, 18 Nov 2021 15:01:30 +0000
+X-MS-PublicTrafficType: Email
+X-MS-Office365-Filtering-Correlation-Id: 55f5ce5d-ffc6-4e7e-4fca-08d9aaa45009
+X-MS-TrafficTypeDiagnostic: DM6PR12MB4893:
+X-Microsoft-Antispam-PRVS: <DM6PR12MB4893610487A9B9237D482D6CC29B9@DM6PR12MB4893.namprd12.prod.outlook.com>
+X-MS-Oob-TLC-OOBClassifiers: OLM:10000;
+X-MS-Exchange-SenderADCheck: 1
+X-MS-Exchange-AntiSpam-Relay: 0
+X-Microsoft-Antispam: BCL:0;
+X-Microsoft-Antispam-Message-Info: 2twXRiGjwn0WAdUMB85YjIoTqhAlL6V2LPfglwi29AYrvFcnlhx8hA10z7vmWnYJ8Goc4jLwmwAnoT7k8Q2E7gExS1Swdz6291BQWGl5EWPMsBTcxM9HmHZfMb175ScDFy6HD6OG8j8SA0lzeWf0qaaVMvQQStryyVUMDKj1yprfFflhe8w7I+QhpCgKnBQaI6zTVZhFf2BkKufDcqsR/7Yewe9WXgCYzVIL8cmyTu4kHZcuAKdcCvgedJx6qw9fC2RGdu+ACL6ILojxc7GikqqBcYhgjYU2orsNSubM3FRrMt7N6tAkcMcj2FkxG0Q8oh6c0o6ZDqFJGBY04Xo5H4wAWPBZON6i5/tQeAS7NsaOxL+4A1NqSVmnkxLxy0HbfHoQuNwiFDsL0BcKTHXqLg/k/PqTJVmc8RN/Fpz0ch2pdUhxxTpsNle69AbEhx7CB0NsEMo7zFPH0tTjY8DyXKqvWDyHIEnKibZh57sHclW2KShMaZuTd00Qwr8mD+YK3Fy6JM/1Q1lfSYMAE7Lr2Th/HSAnoqH19qvv6UcEobK3oJwWValmLjfdhpAexw8HklyG1fmMXicRmapvXwyOu3+5aEuURiNzI3QaXa+QVs4k7uxnZC1PLEsiLw2f+P6enRqf+NSs1v3MyhUje8k5G/M9YuqfjEqlci6XtymuFKuGTE2PdqOYGBIdxqwaBVdpoXcJ9XDBxYKJxTHocNBQDlU3Hnk53f0UcHcX4acts2g=
+X-Forefront-Antispam-Report: CIP:255.255.255.255;CTRY:;LANG:en;SCL:1;SRV:;IPV:NLI;SFV:NSPM;H:DM6PR12MB3819.namprd12.prod.outlook.com;PTR:;CAT:NONE;SFS:(4636009)(366004)(2906002)(6486002)(6666004)(8676002)(86362001)(186003)(2616005)(66946007)(316002)(54906003)(956004)(4326008)(16576012)(66556008)(66476007)(7416002)(5660300002)(83380400001)(6916009)(33656002)(30864003)(235185007)(36756003)(508600001)(8936002)(26005)(38100700002)(21480400003)(53546011)(45980500001)(72826004);DIR:OUT;SFP:1101;
+X-MS-Exchange-AntiSpam-MessageData-ChunkCount: 1
+X-MS-Exchange-AntiSpam-MessageData-0: =?us-ascii?Q?X9Teo5vTQ0lKwSVMeuRoubgjilt71W5jvWKDxb/mwxWnXPgBW2r58PMUqye8?=
+ =?us-ascii?Q?NfNlSWjg3ITl8yXGSZJ8z3VVuSbjAvMpSznu+i1LxXjce7tuCHrG6v2xGhpB?=
+ =?us-ascii?Q?a8cBCKejn7OSDZj3rnN0N7GKEIqrtX5f8JlYjS/Kiv/jPrTam5ht0twuu6BY?=
+ =?us-ascii?Q?OWhPmBNGecGf3w08OjP0d2lAxPCy6DoBjPGtNUDOYZwqFsr76OYZXpsR4Jr2?=
+ =?us-ascii?Q?9HD2dtrdJ7+notnqImAmjLPyxoW/VJTUyP6VBGMOiGKGz3qGVTclNwN1dnLx?=
+ =?us-ascii?Q?blZocsbl31qZgJVyVjNxKVjqQD+HY4GH4nP2Vz+sH//nI2D7r8yYWrGXNQoS?=
+ =?us-ascii?Q?neJSwSnQSeGV4gxKW+0a0e9kEKQBPuTA422wbsgMepyo7tOkSPOZhkJumZyW?=
+ =?us-ascii?Q?wNl9Uasis9Q26x4yDMD0GqWcL3k9aoCgEPQJETOBoYZBu5ixg4RAp3hyq8Pf?=
+ =?us-ascii?Q?6VQu8cuDO6MTox1ALZjlcgdwn0987ZRv/TfXWM85HGtJlhj+j1+OQUtHj0JE?=
+ =?us-ascii?Q?ertlncg9ODTMJZN5HjXNyRqUzxtw2VXbKvImKafVBIdg04oif8Ia0lGmuMtb?=
+ =?us-ascii?Q?ZIOOPPqtQBoSunUwwJhrjPnX9GjDC/HQPffWOi3pepFKyykKj/qNXZckMP6E?=
+ =?us-ascii?Q?Jljetj7A9BHuVuQZGjPXSKzTjkXCWgOtCPiYTrKBChEMIks45I7StSXq/qlz?=
+ =?us-ascii?Q?Gpbrxj9emASRyx/XGfUy/znW7oGDsatYkPfeZuiXp82X1UO3mbCIaV2HzZ7p?=
+ =?us-ascii?Q?21iCzfcbKFHsB4d4UTuoVjdpZHA0M6i2NL8VhU5FZXRqq2iVZ3+2FEpw0jtI?=
+ =?us-ascii?Q?KopQZc+72tWFI39sq/wpUCrKp/iDAzDDa+HKsdUp/ErB6wWWNFvRBxO5apPa?=
+ =?us-ascii?Q?FeMGShAA4cfBo7d8O75nxW3BZxuUjAUoHZnJpux/1kPbNr4/XRUhiYEuB0AU?=
+ =?us-ascii?Q?2jXI8NDHXv1EkRingapUzBt5ojD0e8FOivxZQ9R/Xjlo6A72QBxV9+I/yJ1d?=
+ =?us-ascii?Q?QkzyGi6gbgu36X35hTHlETw8V8C16hyGSwjinrvfQPi6rTlKDHFsdCF/N6Lq?=
+ =?us-ascii?Q?qk0j/QLR0eg8NpQfLe4TQPQaMxRJ10x8UGM42pGtmfK2+dbPihmy0wTgClkb?=
+ =?us-ascii?Q?5BfnSGui6aqZ57SAyq1SqfZKaqH9jOUFABUQyojU6FccSAcuQ8WVC0Pc26Zp?=
+ =?us-ascii?Q?07b3cjJgt8rXcrDDpd2zCGxXK1DvaZi8elfGU8nPFOG57rlduO9iJHscuK08?=
+ =?us-ascii?Q?lBdBm6t9tJkVhVU+Nv9lnrMZPpppkmVpzs4ajf9fAWAgxwIfZI0jFiu53DMw?=
+ =?us-ascii?Q?H3fx0T1JIr0pJ9Ipdta4YfE/av3hs/BPt6uT7fKYCTlsgpykPJ9YoS9Z6wXJ?=
+ =?us-ascii?Q?Ed3lejCq4yky5s92AatU5C1kWWgOheE7k1y7ueWSru9Sa+Pfmgm6Ekab9XUF?=
+ =?us-ascii?Q?AXie19lWPcgsgvrFzqFRI5OB3gsEMHzfMYM4kf/2t/DPGNxI2doNAUHhtyJE?=
+ =?us-ascii?Q?kEVL92X/Qr7ZL/omjyE/wWpOsgmiYU6fK1WhiHgcjxGI8s3X5TCT23sfLRB/?=
+ =?us-ascii?Q?KfYq9xNogqjbuKcjQAY=3D?=
+X-OriginatorOrg: Nvidia.com
+X-MS-Exchange-CrossTenant-Network-Message-Id: 55f5ce5d-ffc6-4e7e-4fca-08d9aaa45009
+X-MS-Exchange-CrossTenant-AuthSource: DM6PR12MB3819.namprd12.prod.outlook.com
+X-MS-Exchange-CrossTenant-AuthAs: Internal
+X-MS-Exchange-CrossTenant-OriginalArrivalTime: 18 Nov 2021 15:01:34.5840
+ (UTC)
+X-MS-Exchange-CrossTenant-FromEntityHeader: Hosted
+X-MS-Exchange-CrossTenant-Id: 43083d15-7273-40c1-b7db-39efd9ccc17a
+X-MS-Exchange-CrossTenant-MailboxType: HOSTED
+X-MS-Exchange-CrossTenant-UserPrincipalName: 3Z0jg59hvCyoAg05wlyn2rcuBST7fNbs+pnR3ZHM5scvUnhrRWOiXuby49iGqrlK
+X-MS-Exchange-Transport-CrossTenantHeadersStamped: DM6PR12MB4893
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+--=_MailMate_D82A1751-6FD0-4576-B144-3B93524ACFDA_=
+Content-Type: text/plain
+Content-Transfer-Encoding: quoted-printable
+
+On 15 Nov 2021, at 20:35, Huang Ying wrote:
+
+> With the advent of various new memory types, some machines will have
+> multiple types of memory, e.g. DRAM and PMEM (persistent memory).  The
+> memory subsystem of these machines can be called memory tiering
+> system, because the performance of the different types of memory are
+> usually different.
+>
+> In such system, because of the memory accessing pattern changing etc,
+> some pages in the slow memory may become hot globally.  So in this
+> patch, the NUMA balancing mechanism is enhanced to optimize the page
+> placement among the different memory types according to hot/cold
+> dynamically.
+>
+> In a typical memory tiering system, there are CPUs, fast memory and
+> slow memory in each physical NUMA node.  The CPUs and the fast memory
+> will be put in one logical node (called fast memory node), while the
+> slow memory will be put in another (faked) logical node (called slow
+> memory node).  That is, the fast memory is regarded as local while the
+> slow memory is regarded as remote.  So it's possible for the recently
+> accessed pages in the slow memory node to be promoted to the fast
+> memory node via the existing NUMA balancing mechanism.
+>
+> The original NUMA balancing mechanism will stop to migrate pages if the=
+ free
+> memory of the target node will become below the high watermark.  This
+> is a reasonable policy if there's only one memory type.  But this
+> makes the original NUMA balancing mechanism almost not work to optimize=
+ page
+> placement among different memory types.  Details are as follows.
+>
+> It's the common cases that the working-set size of the workload is
+> larger than the size of the fast memory nodes.  Otherwise, it's
+> unnecessary to use the slow memory at all.  So in the common cases,
+> there are almost always no enough free pages in the fast memory nodes,
+> so that the globally hot pages in the slow memory node cannot be
+> promoted to the fast memory node.  To solve the issue, we have 2
+> choices as follows,
+>
+> a. Ignore the free pages watermark checking when promoting hot pages
+>    from the slow memory node to the fast memory node.  This will
+>    create some memory pressure in the fast memory node, thus trigger
+>    the memory reclaiming.  So that, the cold pages in the fast memory
+>    node will be demoted to the slow memory node.
+>
+> b. Make kswapd of the fast memory node to reclaim pages until the free
+>    pages are a little more (about 10MB) than the high watermark.  Then,=
+
+>    if the free pages of the fast memory node reaches high watermark, an=
+d
+>    some hot pages need to be promoted, kswapd of the fast memory node
+>    will be waken up to demote some cold pages in the fast memory node t=
+o
+>    the slow memory node.  This will free some extra space in the fast
+>    memory node, so the hot pages in the slow memory node can be
+>    promoted to the fast memory node.
+
+Why 10MB? Is 10MB big enough to avoid creating memory pressure on fast
+memory? This number seems pretty ad-hoc and may only work well on your
+test machine.
+
+In theory, this extra free memory space should be related to page promoti=
+on
+throughput and kswapd demotion throughput, right? Patch 5 allows user
+to adjust page promotion throughput, NUMA_BALANCING_PROMOTE_WATERMARK
+at least can be something like X * numa_balancing_rate_limit_mbps.
+Also, is there any way of measuring kswapd demotion throughput at boot
+time? So we can take it into account too. Does this make sense?
+
+>
+> The choice "a" will create the memory pressure in the fast memory
+> node.  If the memory pressure of the workload is high, the memory
+> pressure may become so high that the memory allocation latency of the
+> workload is influenced, e.g. the direct reclaiming may be triggered.
+>
+> The choice "b" works much better at this aspect.  If the memory
+> pressure of the workload is high, the hot pages promotion will stop
+> earlier because its allocation watermark is higher than that of the
+> normal memory allocation.  So in this patch, choice "b" is
+> implemented.
+>
+> In addition to the original page placement optimization among sockets,
+> the NUMA balancing mechanism is extended to be used to optimize page
+> placement according to hot/cold among different memory types.  So the
+> sysctl user space interface (numa_balancing) is extended in a backward
+> compatible way as follow, so that the users can enable/disable these
+> functionality individually.
+>
+> The sysctl is converted from a Boolean value to a bits field.  The
+> definition of the flags is,
+>
+> - 0x0: NUMA_BALANCING_DISABLED
+> - 0x1: NUMA_BALANCING_NORMAL
+> - 0x2: NUMA_BALANCING_MEMORY_TIERING
+>
+> Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+> Cc: Andrew Morton <akpm@linux-foundation.org>
+> Cc: Michal Hocko <mhocko@suse.com>
+> Cc: Rik van Riel <riel@surriel.com>
+> Cc: Mel Gorman <mgorman@suse.de>
+> Cc: Peter Zijlstra <peterz@infradead.org>
+> Cc: Dave Hansen <dave.hansen@linux.intel.com>
+> Cc: Yang Shi <shy828301@gmail.com>
+> Cc: Zi Yan <ziy@nvidia.com>
+> Cc: Wei Xu <weixugc@google.com>
+> Cc: osalvador <osalvador@suse.de>
+> Cc: Shakeel Butt <shakeelb@google.com>
+> Cc: linux-kernel@vger.kernel.org
+> Cc: linux-mm@kvack.org
+> ---
+>  Documentation/admin-guide/sysctl/kernel.rst | 29 ++++++++++++++-------=
+
+>  include/linux/sched/sysctl.h                | 10 +++++++
+>  kernel/sched/core.c                         | 21 ++++++++++++---
+>  kernel/sysctl.c                             |  3 ++-
+>  mm/migrate.c                                | 19 ++++++++++++--
+>  mm/vmscan.c                                 | 16 ++++++++++++
+>  6 files changed, 82 insertions(+), 16 deletions(-)
+>
+> diff --git a/Documentation/admin-guide/sysctl/kernel.rst b/Documentatio=
+n/admin-guide/sysctl/kernel.rst
+> index 426162009ce9..1974a559c10b 100644
+> --- a/Documentation/admin-guide/sysctl/kernel.rst
+> +++ b/Documentation/admin-guide/sysctl/kernel.rst
+> @@ -595,16 +595,23 @@ Documentation/admin-guide/kernel-parameters.rst).=
+
+>  numa_balancing
+>  =3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D
+>
+> -Enables/disables automatic page fault based NUMA memory
+> -balancing. Memory is moved automatically to nodes
+> -that access it often.
+> +Enables/disables and configure automatic page fault based NUMA memory
+> +balancing.  Memory is moved automatically to nodes that access it
+> +often.  The value to set can be the result to OR the following,
+>
+> -Enables/disables automatic NUMA memory balancing. On NUMA machines, th=
+ere
+> -is a performance penalty if remote memory is accessed by a CPU. When t=
+his
+> -feature is enabled the kernel samples what task thread is accessing me=
+mory
+> -by periodically unmapping pages and later trapping a page fault. At th=
+e
+> -time of the page fault, it is determined if the data being accessed sh=
+ould
+> -be migrated to a local memory node.
+> +=3D =3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D
+> +0x0 NUMA_BALANCING_DISABLED
+> +0x1 NUMA_BALANCING_NORMAL
+> +0x2 NUMA_BALANCING_MEMORY_TIERING
+> +=3D =3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D
+> +
+> +Or NUMA_BALANCING_NORMAL to optimize page placement among different
+> +NUMA nodes to reduce remote accessing.  On NUMA machines, there is a
+> +performance penalty if remote memory is accessed by a CPU. When this
+> +feature is enabled the kernel samples what task thread is accessing
+> +memory by periodically unmapping pages and later trapping a page
+> +fault. At the time of the page fault, it is determined if the data
+> +being accessed should be migrated to a local memory node.
+>
+>  The unmapping of pages and trapping faults incur additional overhead t=
+hat
+>  ideally is offset by improved memory locality but there is no universa=
+l
+> @@ -615,6 +622,10 @@ faults may be controlled by the `numa_balancing_sc=
+an_period_min_ms,
+>  numa_balancing_scan_delay_ms, numa_balancing_scan_period_max_ms,
+>  numa_balancing_scan_size_mb`_, and numa_balancing_settle_count sysctls=
+=2E
+>
+> +Or NUMA_BALANCING_MEMORY_TIERING to optimize page placement among
+> +different types of memory (represented as different NUMA nodes) to
+> +place the hot pages in the fast memory.  This is implemented based on
+> +unmapping and page fault too.
+>
+>  numa_balancing_scan_period_min_ms, numa_balancing_scan_delay_ms, numa_=
+balancing_scan_period_max_ms, numa_balancing_scan_size_mb
+>  =3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D
+> diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.=
+h
+> index 304f431178fd..bc54c1d75d6d 100644
+> --- a/include/linux/sched/sysctl.h
+> +++ b/include/linux/sched/sysctl.h
+> @@ -35,6 +35,16 @@ enum sched_tunable_scaling {
+>  	SCHED_TUNABLESCALING_END,
+>  };
+>
+> +#define NUMA_BALANCING_DISABLED		0x0
+> +#define NUMA_BALANCING_NORMAL		0x1
+> +#define NUMA_BALANCING_MEMORY_TIERING	0x2
+> +
+> +#ifdef CONFIG_NUMA_BALANCING
+> +extern int sysctl_numa_balancing_mode;
+> +#else
+> +#define sysctl_numa_balancing_mode	0
+> +#endif
+> +
+>  /*
+>   *  control realtime throttling:
+>   *
+> diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+> index 3c9b0fda64ac..5dcabc98432f 100644
+> --- a/kernel/sched/core.c
+> +++ b/kernel/sched/core.c
+> @@ -4265,7 +4265,9 @@ DEFINE_STATIC_KEY_FALSE(sched_numa_balancing);
+>
+>  #ifdef CONFIG_NUMA_BALANCING
+>
+> -void set_numabalancing_state(bool enabled)
+> +int sysctl_numa_balancing_mode;
+> +
+> +static void __set_numabalancing_state(bool enabled)
+>  {
+>  	if (enabled)
+>  		static_branch_enable(&sched_numa_balancing);
+> @@ -4273,13 +4275,22 @@ void set_numabalancing_state(bool enabled)
+>  		static_branch_disable(&sched_numa_balancing);
+>  }
+>
+> +void set_numabalancing_state(bool enabled)
+> +{
+> +	if (enabled)
+> +		sysctl_numa_balancing_mode =3D NUMA_BALANCING_NORMAL;
+> +	else
+> +		sysctl_numa_balancing_mode =3D NUMA_BALANCING_DISABLED;
+> +	__set_numabalancing_state(enabled);
+> +}
+> +
+>  #ifdef CONFIG_PROC_SYSCTL
+>  int sysctl_numa_balancing(struct ctl_table *table, int write,
+>  			  void *buffer, size_t *lenp, loff_t *ppos)
+>  {
+>  	struct ctl_table t;
+>  	int err;
+> -	int state =3D static_branch_likely(&sched_numa_balancing);
+> +	int state =3D sysctl_numa_balancing_mode;
+>
+>  	if (write && !capable(CAP_SYS_ADMIN))
+>  		return -EPERM;
+> @@ -4289,8 +4300,10 @@ int sysctl_numa_balancing(struct ctl_table *tabl=
+e, int write,
+>  	err =3D proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+>  	if (err < 0)
+>  		return err;
+> -	if (write)
+> -		set_numabalancing_state(state);
+> +	if (write) {
+> +		sysctl_numa_balancing_mode =3D state;
+> +		__set_numabalancing_state(state);
+> +	}
+>  	return err;
+>  }
+>  #endif
+> diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+> index 083be6af29d7..a1be94ea80ba 100644
+> --- a/kernel/sysctl.c
+> +++ b/kernel/sysctl.c
+> @@ -115,6 +115,7 @@ static int sixty =3D 60;
+>
+>  static int __maybe_unused neg_one =3D -1;
+>  static int __maybe_unused two =3D 2;
+> +static int __maybe_unused three =3D 3;
+>  static int __maybe_unused four =3D 4;
+>  static unsigned long zero_ul;
+>  static unsigned long one_ul =3D 1;
+> @@ -1808,7 +1809,7 @@ static struct ctl_table kern_table[] =3D {
+>  		.mode		=3D 0644,
+>  		.proc_handler	=3D sysctl_numa_balancing,
+>  		.extra1		=3D SYSCTL_ZERO,
+> -		.extra2		=3D SYSCTL_ONE,
+> +		.extra2		=3D &three,
+>  	},
+>  #endif /* CONFIG_NUMA_BALANCING */
+>  	{
+> diff --git a/mm/migrate.c b/mm/migrate.c
+> index b7c27abb0e5c..286c84c014dd 100644
+> --- a/mm/migrate.c
+> +++ b/mm/migrate.c
+> @@ -50,6 +50,7 @@
+>  #include <linux/ptrace.h>
+>  #include <linux/oom.h>
+>  #include <linux/memory.h>
+> +#include <linux/sched/sysctl.h>
+>
+>  #include <asm/tlbflush.h>
+>
+> @@ -2103,16 +2104,30 @@ static int numamigrate_isolate_page(pg_data_t *=
+pgdat, struct page *page)
+>  {
+>  	int page_lru;
+>  	int nr_pages =3D thp_nr_pages(page);
+> +	int order =3D compound_order(page);
+>
+> -	VM_BUG_ON_PAGE(compound_order(page) && !PageTransHuge(page), page);
+> +	VM_BUG_ON_PAGE(order && !PageTransHuge(page), page);
+>
+>  	/* Do not migrate THP mapped by multiple processes */
+>  	if (PageTransHuge(page) && total_mapcount(page) > 1)
+>  		return 0;
+>
+>  	/* Avoid migrating to a node that is nearly full */
+> -	if (!migrate_balanced_pgdat(pgdat, nr_pages))
+> +	if (!migrate_balanced_pgdat(pgdat, nr_pages)) {
+> +		int z;
+> +
+> +		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) ||=
+
+> +		    !numa_demotion_enabled)
+> +			return 0;
+> +		if (next_demotion_node(pgdat->node_id) =3D=3D NUMA_NO_NODE)
+> +			return 0;
+> +		for (z =3D pgdat->nr_zones - 1; z >=3D 0; z--) {
+> +			if (populated_zone(pgdat->node_zones + z))
+> +				break;
+> +		}
+> +		wakeup_kswapd(pgdat->node_zones + z, 0, order, ZONE_MOVABLE);
+>  		return 0;
+> +	}
+>
+>  	if (isolate_lru_page(page))
+>  		return 0;
+> diff --git a/mm/vmscan.c b/mm/vmscan.c
+> index fb9584641ac7..8ec955404bd1 100644
+> --- a/mm/vmscan.c
+> +++ b/mm/vmscan.c
+> @@ -56,6 +56,7 @@
+>
+>  #include <linux/swapops.h>
+>  #include <linux/balloon_compaction.h>
+> +#include <linux/sched/sysctl.h>
+>
+>  #include "internal.h"
+>
+> @@ -3908,6 +3909,12 @@ static bool pgdat_watermark_boosted(pg_data_t *p=
+gdat, int highest_zoneidx)
+>  	return false;
+>  }
+>
+> +/*
+> + * Keep the free pages on fast memory node a little more than the high=
+
+> + * watermark to accommodate the promoted pages.
+> + */
+> +#define NUMA_BALANCING_PROMOTE_WATERMARK	(10UL * 1024 * 1024 >> PAGE_S=
+HIFT)
+> +
+>  /*
+>   * Returns true if there is an eligible zone balanced for the request =
+order
+>   * and highest_zoneidx
+> @@ -3929,6 +3936,15 @@ static bool pgdat_balanced(pg_data_t *pgdat, int=
+ order, int highest_zoneidx)
+>  			continue;
+>
+>  		mark =3D high_wmark_pages(zone);
+> +		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
+> +		    numa_demotion_enabled &&
+> +		    next_demotion_node(pgdat->node_id) !=3D NUMA_NO_NODE) {
+> +			unsigned long promote_mark;
+> +
+> +			promote_mark =3D min(NUMA_BALANCING_PROMOTE_WATERMARK,
+> +					   pgdat->node_present_pages >> 6);
+> +			mark +=3D promote_mark;
+> +		}
+>  		if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
+>  			return true;
+>  	}
+> -- =
+
+> 2.30.2
+
+--
+Best Regards,
+Yan, Zi
+
+--=_MailMate_D82A1751-6FD0-4576-B144-3B93524ACFDA_=
+Content-Description: OpenPGP digital signature
+Content-Disposition: attachment; filename="signature.asc"
+Content-Type: application/pgp-signature; name="signature.asc"
+
+-----BEGIN PGP SIGNATURE-----
+
+iQJDBAEBCgAtFiEEh7yFAW3gwjwQ4C9anbJR82th+ooFAmGWascPHHppeUBudmlk
+aWEuY29tAAoJEJ2yUfNrYfqKSsUP/A3na8W+RQ8f3j1JTSxFU4FizwG/QK5p4Vp3
+I2XohSK+/ExAJwBE+/hepp9gSTYAzE2TUMUIGh1kytxnecBGqjs2FKFzf4XDiZUP
+liZpaja/vRul/d+GpK8WWM90sOgass9K8v9W57NrR4kmBe3U3pBv9htR3ldGNX6b
+1XJv1ikVQhlfWFvCZaQO/UsMD1w613a4kvI1HUW+OM/L48PmcoqpFIFfOt8H0eIv
+LXfoTAbYBQPPpKk0U8wN5eztLvkCU93S8PHNFPFcZd/7keyF5z5PRYxWrfxw/Xxt
+mrpYy16OKD39ETJMIgNDy3wjCQgo6n7M6w82Yr7XNf4Nm2UitXuZDGhaXjsujVWQ
+pzylZe/BZe2ASv0k2A5Zy2IvKIIanY1EwgumTFjHatUScaWvSQ9743lEsR/+izKT
+gaaTvEqborMpkEXdcqWtwYFZ1OhaEiuGW0YvFV1QFCcMgpgrJvtvch+vhiJAVBlz
+varWIiYaVth2zFRQaFM8uaBSkgW1Y2qMjrVpg1ydbsYMO+HjSLUzgyg8kT1hJnet
+7BsMDLHIy3+nwkyxNqqLOz7oZXYwxFY2lqsajL0EthtdEnP1LAckLJMlUquj3pCd
+vc0uO2jJnMuJ9azwyV5MFnGdojF4RN8Rlb7nC4UN/fqfDTsJ8JWGEpB8ic+2ZVcr
+hXNaN9BN
+=2SEO
+-----END PGP SIGNATURE-----
+
+--=_MailMate_D82A1751-6FD0-4576-B144-3B93524ACFDA_=--
+
+From mboxrd@z Thu Jan  1 00:00:00 1970
+Return-Path: <linux-kernel-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D7599C433F5
+	for <linux-kernel@archiver.kernel.org>; Fri, 19 Nov 2021 05:44:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C38BA61AF0
+	for <linux-kernel@archiver.kernel.org>; Fri, 19 Nov 2021 05:44:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233069AbhKSFro (ORCPT <rfc822;linux-kernel@archiver.kernel.org>);
+        Fri, 19 Nov 2021 00:47:44 -0500
+Received: from mga09.intel.com ([134.134.136.24]:58118 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232894AbhKSFrl (ORCPT <rfc822;linux-kernel@vger.kernel.org>);
+        Fri, 19 Nov 2021 00:47:41 -0500
+X-IronPort-AV: E=McAfee;i="6200,9189,10172"; a="234192659"
+X-IronPort-AV: E=Sophos;i="5.87,246,1631602800"; 
+   d="scan'208";a="234192659"
+Received: from orsmga007.jf.intel.com ([10.7.209.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 18 Nov 2021 21:44:28 -0800
+X-IronPort-AV: E=Sophos;i="5.87,246,1631602800"; 
+   d="scan'208";a="495730950"
+Received: from yhuang6-desk2.sh.intel.com (HELO yhuang6-desk2.ccr.corp.intel.com) ([10.239.159.101])
+  by orsmga007-auth.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384; 18 Nov 2021 21:44:24 -0800
+From:   "Huang, Ying" <ying.huang@intel.com>
+To:     Zi Yan <ziy@nvidia.com>
+Cc:     Peter Zijlstra <peterz@infradead.org>,
+        Mel Gorman <mgorman@suse.de>, <linux-mm@kvack.org>,
+        <linux-kernel@vger.kernel.org>, Feng Tang <feng.tang@intel.com>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        "Michal Hocko" <mhocko@suse.com>, Rik van Riel <riel@surriel.com>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Yang Shi <shy828301@gmail.com>, Wei Xu <weixugc@google.com>,
+        osalvador <osalvador@suse.de>, Shakeel Butt <shakeelb@google.com>
+Subject: Re: [PATCH -V10 2/6] NUMA balancing: optimize page placement for
+ memory tiering system
+References: <20211116013522.140575-1-ying.huang@intel.com>
+        <20211116013522.140575-3-ying.huang@intel.com>
+        <C9EB54B4-AA86-4473-AE04-95E3CC6F6E94@nvidia.com>
+Date:   Fri, 19 Nov 2021 13:44:22 +0800
+In-Reply-To: <C9EB54B4-AA86-4473-AE04-95E3CC6F6E94@nvidia.com> (Zi Yan's
+        message of "Thu, 18 Nov 2021 10:01:26 -0500")
+Message-ID: <87bl2gsnrd.fsf@yhuang6-desk2.ccr.corp.intel.com>
+User-Agent: Gnus/5.13 (Gnus v5.13) Emacs/27.1 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ascii
+Precedence: bulk
+List-ID: <linux-kernel.vger.kernel.org>
+X-Mailing-List: linux-kernel@vger.kernel.org
+
+Hi, Zi,
+
+Thanks for review!
+
+Zi Yan <ziy@nvidia.com> writes:
+
+> On 15 Nov 2021, at 20:35, Huang Ying wrote:
+>
+>> With the advent of various new memory types, some machines will have
+>> multiple types of memory, e.g. DRAM and PMEM (persistent memory).  The
+>> memory subsystem of these machines can be called memory tiering
+>> system, because the performance of the different types of memory are
+>> usually different.
+>>
+>> In such system, because of the memory accessing pattern changing etc,
+>> some pages in the slow memory may become hot globally.  So in this
+>> patch, the NUMA balancing mechanism is enhanced to optimize the page
+>> placement among the different memory types according to hot/cold
+>> dynamically.
+>>
+>> In a typical memory tiering system, there are CPUs, fast memory and
+>> slow memory in each physical NUMA node.  The CPUs and the fast memory
+>> will be put in one logical node (called fast memory node), while the
+>> slow memory will be put in another (faked) logical node (called slow
+>> memory node).  That is, the fast memory is regarded as local while the
+>> slow memory is regarded as remote.  So it's possible for the recently
+>> accessed pages in the slow memory node to be promoted to the fast
+>> memory node via the existing NUMA balancing mechanism.
+>>
+>> The original NUMA balancing mechanism will stop to migrate pages if the free
+>> memory of the target node will become below the high watermark.  This
+>> is a reasonable policy if there's only one memory type.  But this
+>> makes the original NUMA balancing mechanism almost not work to optimize page
+>> placement among different memory types.  Details are as follows.
+>>
+>> It's the common cases that the working-set size of the workload is
+>> larger than the size of the fast memory nodes.  Otherwise, it's
+>> unnecessary to use the slow memory at all.  So in the common cases,
+>> there are almost always no enough free pages in the fast memory nodes,
+>> so that the globally hot pages in the slow memory node cannot be
+>> promoted to the fast memory node.  To solve the issue, we have 2
+>> choices as follows,
+>>
+>> a. Ignore the free pages watermark checking when promoting hot pages
+>>    from the slow memory node to the fast memory node.  This will
+>>    create some memory pressure in the fast memory node, thus trigger
+>>    the memory reclaiming.  So that, the cold pages in the fast memory
+>>    node will be demoted to the slow memory node.
+>>
+>> b. Make kswapd of the fast memory node to reclaim pages until the free
+>>    pages are a little more (about 10MB) than the high watermark.  Then,
+>>    if the free pages of the fast memory node reaches high watermark, and
+>>    some hot pages need to be promoted, kswapd of the fast memory node
+>>    will be waken up to demote some cold pages in the fast memory node to
+>>    the slow memory node.  This will free some extra space in the fast
+>>    memory node, so the hot pages in the slow memory node can be
+>>    promoted to the fast memory node.
+>
+> Why 10MB? Is 10MB big enough to avoid creating memory pressure on fast
+> memory? This number seems pretty ad-hoc and may only work well on your
+> test machine.
+>
+> In theory, this extra free memory space should be related to page promotion
+> throughput and kswapd demotion throughput, right? Patch 5 allows user
+> to adjust page promotion throughput, NUMA_BALANCING_PROMOTE_WATERMARK
+> at least can be something like X * numa_balancing_rate_limit_mbps.
+> Also, is there any way of measuring kswapd demotion throughput at boot
+> time? So we can take it into account too. Does this make sense?
+
+Yes.  10MB is just a ad-hoc number that happens work well on my test
+machine.  And I am glad to discuss the proper value.
+
+- The effect of the patchset will keep the size of the free memory in
+  the DRAM node between HIGH_WATERMARK and HIGH_WATERMARK +
+  PROMOTE_WATERMARK in normal cases.  So PROMOTE_WATERMARK should be
+  as small as possible to take full advantage of the valuable DRAM.
+
+- The PROMOTE_WATERMARK should be larger than the max per-CPU counter
+  error.  So that migrate_balanced_pgdat() for promotion and
+  pgdat_balanced() for demotion can cooperate.
+
+- The PROMOTE_WATERMARK should be large enough to batch the demotion.
+
+- If the promotion speed is slower than the demotion speed, the larger
+  the PROMOTE_WATERMARK, the longer the sleep time of kswapd.  If the
+  promotion speed is faster than the demotion speed, kswapd will keep
+  running until promotion is rate limited at least.
+
+So, if we set PROMOTE_WATERMARK as N * numa_balancing_rate_limit_mbps,
+then kswapd will sleep about N seconds after the number of the free
+pages reaches PROMOTE_WATERMARK.  Is that expected?
+
+All in all, I don't think some ad-hoc number such as 10MB is good
+enough.  And the solution adopted in this patch should be as simple as
+possible.  This will provide a baseline, so that we can improve it later
+with more sophisticated solution with the numbers.  Do you agree?
+
+Best Regards,
+Huang, Ying
+
+>>
+>> The choice "a" will create the memory pressure in the fast memory
+>> node.  If the memory pressure of the workload is high, the memory
+>> pressure may become so high that the memory allocation latency of the
+>> workload is influenced, e.g. the direct reclaiming may be triggered.
+>>
+>> The choice "b" works much better at this aspect.  If the memory
+>> pressure of the workload is high, the hot pages promotion will stop
+>> earlier because its allocation watermark is higher than that of the
+>> normal memory allocation.  So in this patch, choice "b" is
+>> implemented.
+>>
+>> In addition to the original page placement optimization among sockets,
+>> the NUMA balancing mechanism is extended to be used to optimize page
+>> placement according to hot/cold among different memory types.  So the
+>> sysctl user space interface (numa_balancing) is extended in a backward
+>> compatible way as follow, so that the users can enable/disable these
+>> functionality individually.
+>>
+>> The sysctl is converted from a Boolean value to a bits field.  The
+>> definition of the flags is,
+>>
+>> - 0x0: NUMA_BALANCING_DISABLED
+>> - 0x1: NUMA_BALANCING_NORMAL
+>> - 0x2: NUMA_BALANCING_MEMORY_TIERING
+>>
+>> Signed-off-by: "Huang, Ying" <ying.huang@intel.com>
+>> Cc: Andrew Morton <akpm@linux-foundation.org>
+>> Cc: Michal Hocko <mhocko@suse.com>
+>> Cc: Rik van Riel <riel@surriel.com>
+>> Cc: Mel Gorman <mgorman@suse.de>
+>> Cc: Peter Zijlstra <peterz@infradead.org>
+>> Cc: Dave Hansen <dave.hansen@linux.intel.com>
+>> Cc: Yang Shi <shy828301@gmail.com>
+>> Cc: Zi Yan <ziy@nvidia.com>
+>> Cc: Wei Xu <weixugc@google.com>
+>> Cc: osalvador <osalvador@suse.de>
+>> Cc: Shakeel Butt <shakeelb@google.com>
+>> Cc: linux-kernel@vger.kernel.org
+>> Cc: linux-mm@kvack.org
+
+[snip]
+
+Best Regards,
+Huang, Ying
+
