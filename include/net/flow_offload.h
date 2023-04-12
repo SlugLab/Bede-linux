@@ -321,7 +321,7 @@ flow_action_mixed_hw_stats_check(const struct flow_action *action,
 
 	flow_action_for_each(i, action_entry, action) {
 		if (i && action_entry->hw_stats != last_hw_stats) {
-			NL_SET_ERR_MSG_MOD(extack, "Mixing HW stats types for actions is not supported");
+			// NL_SET_ERR_MSG_MOD(extack, "Mixing HW stats types for actions is not supported");
 			return false;
 		}
 		last_hw_stats = action_entry->hw_stats;
@@ -356,11 +356,11 @@ __flow_action_hw_stats_check(const struct flow_action *action,
 
 	if (!check_allow_bit &&
 	    ~action_entry->hw_stats & FLOW_ACTION_HW_STATS_ANY) {
-		NL_SET_ERR_MSG_MOD(extack, "Driver supports only default HW stats type \"any\"");
+		// NL_SET_ERR_MSG_MOD(extack, "Driver supports only default HW stats type \"any\"");
 		return false;
 	} else if (check_allow_bit &&
 		   !(action_entry->hw_stats & BIT(allow_bit))) {
-		NL_SET_ERR_MSG_MOD(extack, "Driver does not support selected HW stats type");
+		// NL_SET_ERR_MSG_MOD(extack, "Driver does not support selected HW stats type");
 		return false;
 	}
 	return true;

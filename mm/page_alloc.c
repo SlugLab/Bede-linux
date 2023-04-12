@@ -4843,7 +4843,7 @@ check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 	return false;
 }
 
-static inline struct page *
+struct page *
 __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 						struct alloc_context *ac)
 {
@@ -5115,6 +5115,7 @@ fail:
 got_pg:
 	return page;
 }
+EXPORT_SYMBOL(__alloc_pages_slowpath);
 
 static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		int preferred_nid, nodemask_t *nodemask,

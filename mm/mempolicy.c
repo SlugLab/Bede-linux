@@ -1780,6 +1780,8 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 
 	return NULL;
 }
+EXPORT_SYMBOL(policy_nodemask);
+ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
 
 /*
  * Return the  preferred node id for 'prefer' mempolicy, and return
@@ -1788,7 +1790,7 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
  * policy_node() is always coupled with policy_nodemask(), which
  * secures the nodemask limit for 'bind' and 'prefer-many' policy.
  */
-static int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
+int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
 	if (policy->mode == MPOL_PREFERRED) {
 		nd = first_node(policy->nodes);
@@ -1800,9 +1802,10 @@ static int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 		 */
 		WARN_ON_ONCE(policy->mode == MPOL_BIND && (gfp & __GFP_THISNODE));
 	}
-
 	return nd;
 }
+EXPORT_SYMBOL(policy_node);
+ALLOW_ERROR_INJECTION(policy_node, TRUE);
 
 /* Do dynamic interleaving for a process */
 static unsigned interleave_nodes(struct mempolicy *policy)
@@ -2187,11 +2190,11 @@ struct page *alloc_pages(gfp_t gfp, unsigned order)
 	else if (pol->mode == MPOL_PREFERRED_MANY)
 		page = alloc_pages_preferred_many(gfp, order,
 				numa_node_id(), pol);
-	else
+	else {
 		page = __alloc_pages(gfp, order,
 				policy_node(gfp, pol, numa_node_id()),
 				policy_nodemask(gfp, pol));
-
+	}
 	return page;
 }
 EXPORT_SYMBOL(alloc_pages);
