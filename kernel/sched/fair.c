@@ -1378,7 +1378,7 @@ static inline unsigned long group_weight(struct task_struct *p, int nid,
 static bool pgdat_free_space_enough(struct pglist_data *pgdat)
 {
 	int z;
-	unsigned long enough_mark;
+	unsigned long enough_mark;// iterate the free page in the zone
 
 	enough_mark = max(1UL * 1024 * 1024 * 1024 >> PAGE_SHIFT,
 			  pgdat->node_present_pages >> 4);
@@ -1470,6 +1470,7 @@ static bool numa_migration_check_rate_limit(struct pglist_data *pgdat,
 		return false;
 	return true;
 }
+
 
 bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
 				int src_nid, int dst_cpu)
@@ -1569,6 +1570,8 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
 	return group_faults_cpu(ng, dst_nid) * group_faults(p, src_nid) * 3 >
 	       group_faults_cpu(ng, src_nid) * group_faults(p, dst_nid) * 4;
 }
+EXPORT_SYMBOL_GPL(should_numa_migrate_memory);
+ALLOW_ERROR_INJECTION(should_numa_migrate_memory, ERRNO);
 
 /*
  * 'numa_type' describes the node at the moment of load balancing.

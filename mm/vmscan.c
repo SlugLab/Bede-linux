@@ -3915,11 +3915,19 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
  */
 #define NUMA_BALANCING_PROMOTE_WATERMARK	(10UL * 1024 * 1024 >> PAGE_SHIFT)
 
+int get_promote_mark(pg_data_t *pgdat)
+{
+	return min(NUMA_BALANCING_PROMOTE_WATERMARK,
+		   pgdat->node_present_pages >> 6);
+}
+EXPORT_SYMBOL(get_promote_mark);
+ALLOW_ERROR_INJECTION(get_promote_mark, TRUE);
+ 
 /*
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
  */
-static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
+bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 {
 	int i;
 	unsigned long mark = -1;
@@ -3935,14 +3943,13 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 		if (!managed_zone(zone))
 			continue;
 
-		mark = high_wmark_pages(zone);
+		mark = high_wmark_pages(zone); // here to get erh demotion
 		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
 		    numa_demotion_enabled &&
 		    next_demotion_node(pgdat->node_id) != NUMA_NO_NODE) {
 			unsigned long promote_mark;
 
-			promote_mark = min(NUMA_BALANCING_PROMOTE_WATERMARK,
-					   pgdat->node_present_pages >> 6);
+			promote_mark = get_promote_mark(pgdat);
 			mark += promote_mark;
 		}
 		if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
@@ -3959,6 +3966,7 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 
 	return false;
 }
+EXPORT_SYMBOL(pgdat_balanced);
 
 /* Clear pgdat state for congested, dirty or under writeback. */
 static void clear_pgdat_congested(pg_data_t *pgdat)

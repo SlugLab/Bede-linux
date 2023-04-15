@@ -2058,7 +2058,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
  * Returns true if this is a safe migration target node for misplaced NUMA
  * pages. Currently it only checks the watermarks which crude
  */
-static bool migrate_balanced_pgdat(struct pglist_data *pgdat,
+bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 				   unsigned long nr_migrate_pages)
 {
 	int z;
@@ -2070,7 +2070,7 @@ static bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 			continue;
 
 		/* Avoid waking kswapd by allocating pages_to_migrate pages. */
-		if (!zone_watermark_ok(zone, 0,
+		if (!zone_watermark_ok(zone, 0, // demotion
 				       high_wmark_pages(zone) +
 				       nr_migrate_pages,
 				       ZONE_MOVABLE, 0))
@@ -2079,6 +2079,8 @@ static bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 	}
 	return false;
 }
+EXPORT_SYMBOL(migrate_balanced_pgdat);
+ALLOW_ERROR_INJECTION(migrate_balanced_pgdat, TRUE)
 
 static struct page *alloc_misplaced_dst_page(struct page *page,
 					   unsigned long data)
@@ -2127,7 +2129,7 @@ static int numamigrate_isolate_page(pg_data_t *pgdat, struct page *page)
 	/* Avoid migrating to a node that is nearly full */
 	if (!migrate_balanced_pgdat(pgdat, nr_pages)) {
 		int z;
-
+		
 		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) ||
 		    !numa_demotion_enabled)
 			return 0;
@@ -2231,6 +2233,7 @@ out:
 	put_page(page);
 	return 0;
 }
+
 #endif /* CONFIG_NUMA_BALANCING */
 #endif /* CONFIG_NUMA */
 
