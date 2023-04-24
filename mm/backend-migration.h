@@ -8,11 +8,14 @@
  */
 #include <linux/sched.h>
 #include <linux/workqueue.h>
+#include <linux/migrate.h>
+
+#include <linux/sched/mm.h>
 
 struct pid_work_struct {
 	struct delayed_work work;
 	pid_t pid;
-}
+};
 
 static struct workqueue_struct *pid_workqueue;
 EXPORT_SYMBOL_GPL(pid_workqueue);
