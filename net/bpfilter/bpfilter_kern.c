@@ -21,7 +21,7 @@ static void shutdown_umh(void)
 	if (tgid) {
 		kill_pid(tgid, SIGKILL, 1);
 		wait_event(tgid->wait_pidfd, thread_group_exited(tgid));
-		bpfilter_umh_cleanup(info);
+		umd_cleanup_helper(info);
 	}
 }
 
@@ -70,7 +70,7 @@ static int bpfilter_process_sockopt(struct sock *sk, int optname,
 		.addr		= (uintptr_t)optval.user,
 		.len		= optlen,
 	};
-	if (uaccess_kernel() || sockptr_is_kernel(optval)) {
+	if (sockptr_is_kernel(optval)) {
 		pr_err("kernel access not supported\n");
 		return -EFAULT;
 	}

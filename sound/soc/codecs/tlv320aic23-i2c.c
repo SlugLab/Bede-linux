@@ -16,8 +16,7 @@
 
 #include "tlv320aic23.h"
 
-static int tlv320aic23_i2c_probe(struct i2c_client *i2c,
-				 const struct i2c_device_id *i2c_id)
+static int tlv320aic23_i2c_probe(struct i2c_client *i2c)
 {
 	struct regmap *regmap;
 

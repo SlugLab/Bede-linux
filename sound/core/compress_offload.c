@@ -589,7 +589,7 @@ snd_compr_set_params(struct snd_compr_stream *stream, unsigned long arg)
 	struct snd_compr_params *params;
 	int retval;
 
-	if (stream->runtime->state == SNDRV_PCM_STATE_OPEN) {
+	if (stream->runtime->state == SNDRV_PCM_STATE_OPEN || stream->next_track) {
 		/*
 		 * we should allow parameter change only when stream has been
 		 * opened not in other cases
@@ -610,6 +610,9 @@ snd_compr_set_params(struct snd_compr_stream *stream, unsigned long arg)
 
 		retval = stream->ops->set_params(stream, params);
 		if (retval)
+			goto out;
+
+		if (stream->next_track)
 			goto out;
 
 		stream->metadata_set = false;
@@ -810,7 +813,7 @@ static void error_delayed_work(struct work_struct *work)
 	mutex_unlock(&stream->device->lock);
 }
 
-/*
+/**
  * snd_compr_stop_error: Report a fatal error on a stream
  * @stream: pointer to stream
  * @state: state to transition the stream to
@@ -818,6 +821,8 @@ static void error_delayed_work(struct work_struct *work)
  * Stop the stream and set its state.
  *
  * Should be called with compressed device lock held.
+ *
+ * Return: zero if successful, or a negative error code
  */
 int snd_compr_stop_error(struct snd_compr_stream *stream,
 			 snd_pcm_state_t state)
@@ -1157,12 +1162,15 @@ static int snd_compress_dev_free(struct snd_device *device)
 	return 0;
 }
 
-/*
+/**
  * snd_compress_new: create new compress device
  * @card: sound card pointer
  * @device: device number
  * @dirn: device direction, should be of type enum snd_compr_direction
+ * @id: ID string
  * @compr: compress device pointer
+ *
+ * Return: zero if successful, or a negative error code
  */
 int snd_compress_new(struct snd_card *card, int device,
 			int dirn, const char *id, struct snd_compr *compr)

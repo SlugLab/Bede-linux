@@ -1071,7 +1071,6 @@ static const struct snd_soc_component_driver soc_component_dev_rt1015 = {
 	.set_pll = rt1015_set_component_pll,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config rt1015_regmap = {
@@ -1113,8 +1112,7 @@ static void rt1015_parse_dt(struct rt1015_priv *rt1015, struct device *dev)
 		&rt1015->pdata.power_up_delay_ms);
 }
 
-static int rt1015_i2c_probe(struct i2c_client *i2c,
-	const struct i2c_device_id *id)
+static int rt1015_i2c_probe(struct i2c_client *i2c)
 {
 	struct rt1015_platform_data *pdata = dev_get_platdata(&i2c->dev);
 	struct rt1015_priv *rt1015;

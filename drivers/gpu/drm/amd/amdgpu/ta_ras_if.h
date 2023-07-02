@@ -64,7 +64,8 @@ enum ta_ras_status {
 	TA_RAS_STATUS__ERROR_PCS_STATE_ERROR            = 0xA016,
 	TA_RAS_STATUS__ERROR_PCS_STATE_HANG             = 0xA017,
 	TA_RAS_STATUS__ERROR_PCS_STATE_UNKNOWN          = 0xA018,
-	TA_RAS_STATUS__ERROR_UNSUPPORTED_ERROR_INJ      = 0xA019
+	TA_RAS_STATUS__ERROR_UNSUPPORTED_ERROR_INJ      = 0xA019,
+	TA_RAS_STATUS__TEE_ERROR_ACCESS_DENIED          = 0xA01A
 };
 
 enum ta_ras_block {
@@ -83,6 +84,8 @@ enum ta_ras_block {
 	TA_RAS_BLOCK__MP1,
 	TA_RAS_BLOCK__FUSE,
 	TA_RAS_BLOCK__MCA,
+	TA_RAS_BLOCK__VCN,
+	TA_RAS_BLOCK__JPEG,
 	TA_NUM_BLOCK_MAX
 };
 
@@ -126,6 +129,8 @@ struct ta_ras_trigger_error_input {
 struct ta_ras_init_flags {
 	uint8_t poison_mode_en;
 	uint8_t dgpu_mode;
+	uint16_t xcc_mask;
+	uint8_t channel_dis_num;
 };
 
 struct ta_ras_output_flags {

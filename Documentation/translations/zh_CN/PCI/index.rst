@@ -10,9 +10,6 @@
 :校译:
 
 
-
-.. _cn_PCI_index.rst:
-
 ===================
 Linux PCI总线子系统
 ===================
@@ -22,15 +19,16 @@ Linux PCI总线子系统
    :numbered:
 
    pci
-
-Todolist:
-
    pciebus-howto
    pci-iov-howto
    msi-howto
    sysfs-pci
    acpi-info
-   pci-error-recovery
-   pcieaer-howto
-   endpoint/index
-   boot-interrupts
+
+
+Todolist:
+
+* pci-error-recovery
+* pcieaer-howto
+* endpoint/index
+* boot-interrupts

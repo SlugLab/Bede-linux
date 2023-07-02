@@ -78,8 +78,6 @@
 #define DSI_SEL_IN_RDMA				0x1
 #define DSI_SEL_IN_MASK				0x1
 
-#define MMSYS_SW0_RST_B				0x140
-
 struct mtk_mmsys_routes {
 	u32 from_comp;
 	u32 to_comp;
@@ -92,10 +90,13 @@ struct mtk_mmsys_driver_data {
 	const char *clk_driver;
 	const struct mtk_mmsys_routes *routes;
 	const unsigned int num_routes;
+	const u16 sw0_rst_offset;
+	const u32 num_resets;
+	const bool is_vppsys;
 };
 
 /*
- * Routes in mt8173, mt2701, mt2712 are different. That means
+ * Routes in mt2701 and mt2712 are different. That means
  * in the same register address, it controls different input/output
  * selection for each SoC. But, right now, they use the same table as
  * default routes meet their requirements. But we don't have the complete

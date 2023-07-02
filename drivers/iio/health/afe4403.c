@@ -245,14 +245,14 @@ static int afe4403_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct afe4403_data *afe = iio_priv(indio_dev);
-	unsigned int reg = afe4403_channel_values[chan->address];
-	unsigned int field = afe4403_channel_leds[chan->address];
+	unsigned int reg, field;
 	int ret;
 
 	switch (chan->type) {
 	case IIO_INTENSITY:
 		switch (mask) {
 		case IIO_CHAN_INFO_RAW:
+			reg = afe4403_channel_values[chan->address];
 			ret = afe4403_read(afe, reg, val);
 			if (ret)
 				return ret;
@@ -262,6 +262,7 @@ static int afe4403_read_raw(struct iio_dev *indio_dev,
 	case IIO_CURRENT:
 		switch (mask) {
 		case IIO_CHAN_INFO_RAW:
+			field = afe4403_channel_leds[chan->address];
 			ret = regmap_field_read(afe->fields[field], val);
 			if (ret)
 				return ret;
@@ -345,9 +346,6 @@ err:
 	return IRQ_HANDLED;
 }
 
-static const struct iio_trigger_ops afe4403_trigger_ops = {
-};
-
 #define AFE4403_TIMING_PAIRS			\
 	{ AFE440X_LED2STC,	0x000050 },	\
 	{ AFE440X_LED2ENDC,	0x0003e7 },	\
@@ -411,7 +409,7 @@ static const struct of_device_id afe4403_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, afe4403_of_match);
 
-static int __maybe_unused afe4403_suspend(struct device *dev)
+static int afe4403_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(to_spi_device(dev));
 	struct afe4403_data *afe = iio_priv(indio_dev);
@@ -432,7 +430,7 @@ static int __maybe_unused afe4403_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused afe4403_resume(struct device *dev)
+static int afe4403_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(to_spi_device(dev));
 	struct afe4403_data *afe = iio_priv(indio_dev);
@@ -452,7 +450,8 @@ static int __maybe_unused afe4403_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(afe4403_pm_ops, afe4403_suspend, afe4403_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(afe4403_pm_ops, afe4403_suspend,
+				afe4403_resume);
 
 static int afe4403_probe(struct spi_device *spi)
 {
@@ -530,8 +529,6 @@ static int afe4403_probe(struct spi_device *spi)
 
 		iio_trigger_set_drvdata(afe->trig, indio_dev);
 
-		afe->trig->ops = &afe4403_trigger_ops;
-
 		ret = iio_trigger_register(afe->trig);
 		if (ret) {
 			dev_err(afe->dev, "Unable to register IIO trigger\n");
@@ -575,7 +572,7 @@ err_disable_reg:
 	return ret;
 }
 
-static int afe4403_remove(struct spi_device *spi)
+static void afe4403_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct afe4403_data *afe = iio_priv(indio_dev);
@@ -591,8 +588,6 @@ static int afe4403_remove(struct spi_device *spi)
 	ret = regulator_disable(afe->regulator);
 	if (ret)
 		dev_warn(afe->dev, "Unable to disable regulator\n");
-
-	return 0;
 }
 
 static const struct spi_device_id afe4403_ids[] = {
@@ -605,7 +600,7 @@ static struct spi_driver afe4403_spi_driver = {
 	.driver = {
 		.name = AFE4403_DRIVER_NAME,
 		.of_match_table = afe4403_of_match,
-		.pm = &afe4403_pm_ops,
+		.pm = pm_sleep_ptr(&afe4403_pm_ops),
 	},
 	.probe = afe4403_probe,
 	.remove = afe4403_remove,

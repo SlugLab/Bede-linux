@@ -111,7 +111,7 @@ static irqreturn_t st_rc_rx_interrupt(int irq, void *data)
 		int_status = readl(dev->rx_base + IRB_RX_INT_STATUS);
 		if (unlikely(int_status & IRB_RX_OVERRUN_INT)) {
 			/* discard the entire collection in case of errors!  */
-			ir_raw_event_reset(dev->rdev);
+			ir_raw_event_overflow(dev->rdev);
 			dev_info(dev->dev, "IR RX overrun\n");
 			writel(IRB_RX_OVERRUN_INT,
 					dev->rx_base + IRB_RX_INT_CLEAR);
@@ -194,7 +194,7 @@ static int st_rc_hardware_init(struct st_rc_device *dev)
 	return 0;
 }
 
-static int st_rc_remove(struct platform_device *pdev)
+static void st_rc_remove(struct platform_device *pdev)
 {
 	struct st_rc_device *rc_dev = platform_get_drvdata(pdev);
 
@@ -202,7 +202,6 @@ static int st_rc_remove(struct platform_device *pdev)
 	device_init_wakeup(&pdev->dev, false);
 	clk_disable_unprepare(rc_dev->sys_clock);
 	rc_unregister_device(rc_dev->rdev);
-	return 0;
 }
 
 static int st_rc_open(struct rc_dev *rdev)
@@ -408,7 +407,7 @@ static struct platform_driver st_rc_driver = {
 		.pm     = &st_rc_pm_ops,
 	},
 	.probe = st_rc_probe,
-	.remove = st_rc_remove,
+	.remove_new = st_rc_remove,
 };
 
 module_platform_driver(st_rc_driver);

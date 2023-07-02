@@ -123,34 +123,12 @@ static const struct file_operations iwl_dbgfs_##name##_ops = {		\
 #define FWRT_DEBUGFS_ADD_FILE(name, parent, mode) \
 	FWRT_DEBUGFS_ADD_FILE_ALIAS(#name, name, parent, mode)
 
-static int iwl_fw_send_timestamp_marker_cmd(struct iwl_fw_runtime *fwrt)
-{
-	struct iwl_mvm_marker marker = {
-		.dw_len = sizeof(struct iwl_mvm_marker) / 4,
-		.marker_id = MARKER_ID_SYNC_CLOCK,
-
-		/* the real timestamp is taken from the ftrace clock
-		 * this is for finding the match between fw and kernel logs
-		 */
-		.timestamp = cpu_to_le64(fwrt->timestamp.seq++),
-	};
-
-	struct iwl_host_cmd hcmd = {
-		.id = MARKER_CMD,
-		.flags = CMD_ASYNC,
-		.data[0] = &marker,
-		.len[0] = sizeof(marker),
-	};
-
-	return iwl_trans_send_cmd(fwrt->trans, &hcmd);
-}
-
 static int iwl_dbgfs_enabled_severities_write(struct iwl_fw_runtime *fwrt,
 					      char *buf, size_t count)
 {
 	struct iwl_dbg_host_event_cfg_cmd event_cfg;
 	struct iwl_host_cmd hcmd = {
-		.id = iwl_cmd_id(HOST_EVENT_CFG, DEBUG_GROUP, 0),
+		.id = WIDE_ID(DEBUG_GROUP, HOST_EVENT_CFG),
 		.flags = CMD_ASYNC,
 		.data[0] = &event_cfg,
 		.len[0] = sizeof(event_cfg),
@@ -317,8 +295,10 @@ static void *iwl_dbgfs_fw_info_seq_next(struct seq_file *seq,
 	const struct iwl_fw *fw = priv->fwrt->fw;
 
 	*pos = ++state->pos;
-	if (*pos >= fw->ucode_capa.n_cmd_versions)
+	if (*pos >= fw->ucode_capa.n_cmd_versions) {
+		kfree(state);
 		return NULL;
+	}
 
 	return state;
 }
@@ -352,13 +332,22 @@ static int iwl_dbgfs_fw_info_seq_show(struct seq_file *seq, void *v)
 	const struct iwl_fw *fw = priv->fwrt->fw;
 	const struct iwl_fw_cmd_version *ver;
 	u32 cmd_id;
+	int has_capa;
 
-	if (!state->pos)
+	if (!state->pos) {
+		seq_puts(seq, "fw_capa:\n");
+		has_capa = fw_has_capa(&fw->ucode_capa,
+				       IWL_UCODE_TLV_CAPA_PPAG_CHINA_BIOS_SUPPORT) ? 1 : 0;
+		seq_printf(seq,
+			   "    %d: %d\n",
+			   IWL_UCODE_TLV_CAPA_PPAG_CHINA_BIOS_SUPPORT,
+			   has_capa);
 		seq_puts(seq, "fw_api_ver:\n");
+	}
 
 	ver = &fw->ucode_capa.cmd_versions[state->pos];
 
-	cmd_id = iwl_cmd_id(ver->cmd, ver->group, 0);
+	cmd_id = WIDE_ID(ver->group, ver->cmd);
 
 	seq_printf(seq, "  0x%04x:\n", cmd_id);
 	seq_printf(seq, "    name: %s\n",

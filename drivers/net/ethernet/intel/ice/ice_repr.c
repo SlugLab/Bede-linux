@@ -4,8 +4,9 @@
 #include "ice.h"
 #include "ice_eswitch.h"
 #include "ice_devlink.h"
-#include "ice_virtchnl_pf.h"
+#include "ice_sriov.h"
 #include "ice_tc_lib.h"
+#include "ice_dcb_lib.h"
 
 /**
  * ice_repr_get_sw_port_id - get port ID associated with representor
@@ -134,12 +135,59 @@ static int ice_repr_stop(struct net_device *netdev)
 	return 0;
 }
 
-static struct devlink_port *
-ice_repr_get_devlink_port(struct net_device *netdev)
+/**
+ * ice_repr_sp_stats64 - get slow path stats for port representor
+ * @dev: network interface device structure
+ * @stats: netlink stats structure
+ *
+ * RX/TX stats are being swapped here to be consistent with VF stats. In slow
+ * path, port representor receives data when the corresponding VF is sending it
+ * (and vice versa), TX and RX bytes/packets are effectively swapped on port
+ * representor.
+ */
+static int
+ice_repr_sp_stats64(const struct net_device *dev,
+		    struct rtnl_link_stats64 *stats)
 {
-	struct ice_repr *repr = ice_netdev_to_repr(netdev);
+	struct ice_netdev_priv *np = netdev_priv(dev);
+	int vf_id = np->repr->vf->vf_id;
+	struct ice_tx_ring *tx_ring;
+	struct ice_rx_ring *rx_ring;
+	u64 pkts, bytes;
 
-	return &repr->vf->devlink_port;
+	tx_ring = np->vsi->tx_rings[vf_id];
+	ice_fetch_u64_stats_per_ring(&tx_ring->ring_stats->syncp,
+				     tx_ring->ring_stats->stats,
+				     &pkts, &bytes);
+	stats->rx_packets = pkts;
+	stats->rx_bytes = bytes;
+
+	rx_ring = np->vsi->rx_rings[vf_id];
+	ice_fetch_u64_stats_per_ring(&rx_ring->ring_stats->syncp,
+				     rx_ring->ring_stats->stats,
+				     &pkts, &bytes);
+	stats->tx_packets = pkts;
+	stats->tx_bytes = bytes;
+	stats->tx_dropped = rx_ring->ring_stats->rx_stats.alloc_page_failed +
+			    rx_ring->ring_stats->rx_stats.alloc_buf_failed;
+
+	return 0;
+}
+
+static bool
+ice_repr_ndo_has_offload_stats(const struct net_device *dev, int attr_id)
+{
+	return attr_id == IFLA_OFFLOAD_XSTATS_CPU_HIT;
+}
+
+static int
+ice_repr_ndo_get_offload_stats(int attr_id, const struct net_device *dev,
+			       void *sp)
+{
+	if (attr_id == IFLA_OFFLOAD_XSTATS_CPU_HIT)
+		return ice_repr_sp_stats64(dev, (struct rtnl_link_stats64 *)sp);
+
+	return -EINVAL;
 }
 
 static int
@@ -197,8 +245,9 @@ static const struct net_device_ops ice_repr_netdev_ops = {
 	.ndo_open = ice_repr_open,
 	.ndo_stop = ice_repr_stop,
 	.ndo_start_xmit = ice_eswitch_port_start_xmit,
-	.ndo_get_devlink_port = ice_repr_get_devlink_port,
 	.ndo_setup_tc = ice_repr_setup_tc,
+	.ndo_has_offload_stats = ice_repr_ndo_has_offload_stats,
+	.ndo_get_offload_stats = ice_repr_ndo_get_offload_stats,
 };
 
 /**
@@ -238,7 +287,12 @@ static int ice_repr_add(struct ice_vf *vf)
 	struct ice_q_vector *q_vector;
 	struct ice_netdev_priv *np;
 	struct ice_repr *repr;
+	struct ice_vsi *vsi;
 	int err;
+
+	vsi = ice_get_vf_vsi(vf);
+	if (!vsi)
+		return -EINVAL;
 
 	repr = kzalloc(sizeof(*repr), GFP_KERNEL);
 	if (!repr)
@@ -250,7 +304,7 @@ static int ice_repr_add(struct ice_vf *vf)
 		goto err_alloc;
 	}
 
-	repr->src_vsi = ice_get_vf_vsi(vf);
+	repr->src_vsi = vsi;
 	repr->vf = vf;
 	vf->repr = repr;
 	np = netdev_priv(repr->netdev);
@@ -270,11 +324,13 @@ static int ice_repr_add(struct ice_vf *vf)
 	repr->netdev->min_mtu = ETH_MIN_MTU;
 	repr->netdev->max_mtu = ICE_MAX_MTU;
 
+	SET_NETDEV_DEV(repr->netdev, ice_pf_to_dev(vf->pf));
+	SET_NETDEV_DEVLINK_PORT(repr->netdev, &vf->devlink_port);
 	err = ice_repr_reg_netdev(repr->netdev);
 	if (err)
 		goto err_netdev;
 
-	devlink_port_type_eth_set(&vf->devlink_port, repr->netdev);
+	ice_virtchnl_set_repr_ops(vf);
 
 	return 0;
 
@@ -298,46 +354,19 @@ err_alloc:
  */
 static void ice_repr_rem(struct ice_vf *vf)
 {
-	ice_devlink_destroy_vf_port(vf);
+	if (!vf->repr)
+		return;
+
 	kfree(vf->repr->q_vector);
 	vf->repr->q_vector = NULL;
 	unregister_netdev(vf->repr->netdev);
+	ice_devlink_destroy_vf_port(vf);
 	free_netdev(vf->repr->netdev);
 	vf->repr->netdev = NULL;
 	kfree(vf->repr);
 	vf->repr = NULL;
-}
 
-/**
- * ice_repr_add_for_all_vfs - add port representor for all VFs
- * @pf: pointer to PF structure
- */
-int ice_repr_add_for_all_vfs(struct ice_pf *pf)
-{
-	int err;
-	int i;
-
-	ice_for_each_vf(pf, i) {
-		struct ice_vf *vf = &pf->vf[i];
-
-		err = ice_repr_add(vf);
-		if (err)
-			goto err;
-
-		ice_vc_change_ops_to_repr(&vf->vc_ops);
-	}
-
-	return 0;
-
-err:
-	for (i = i - 1; i >= 0; i--) {
-		struct ice_vf *vf = &pf->vf[i];
-
-		ice_repr_rem(vf);
-		ice_vc_set_dflt_vf_ops(&vf->vc_ops);
-	}
-
-	return err;
+	ice_virtchnl_set_dflt_ops(vf);
 }
 
 /**
@@ -346,14 +375,56 @@ err:
  */
 void ice_repr_rem_from_all_vfs(struct ice_pf *pf)
 {
-	int i;
+	struct devlink *devlink;
+	struct ice_vf *vf;
+	unsigned int bkt;
 
-	ice_for_each_vf(pf, i) {
-		struct ice_vf *vf = &pf->vf[i];
+	lockdep_assert_held(&pf->vfs.table_lock);
 
+	ice_for_each_vf(pf, bkt, vf)
 		ice_repr_rem(vf);
-		ice_vc_set_dflt_vf_ops(&vf->vc_ops);
+
+	/* since all port representors are destroyed, there is
+	 * no point in keeping the nodes
+	 */
+	devlink = priv_to_devlink(pf);
+	devl_lock(devlink);
+	devl_rate_nodes_destroy(devlink);
+	devl_unlock(devlink);
+}
+
+/**
+ * ice_repr_add_for_all_vfs - add port representor for all VFs
+ * @pf: pointer to PF structure
+ */
+int ice_repr_add_for_all_vfs(struct ice_pf *pf)
+{
+	struct devlink *devlink;
+	struct ice_vf *vf;
+	unsigned int bkt;
+	int err;
+
+	lockdep_assert_held(&pf->vfs.table_lock);
+
+	ice_for_each_vf(pf, bkt, vf) {
+		err = ice_repr_add(vf);
+		if (err)
+			goto err;
 	}
+
+	/* only export if ADQ and DCB disabled */
+	if (ice_is_adq_active(pf) || ice_is_dcb_active(pf))
+		return 0;
+
+	devlink = priv_to_devlink(pf);
+	ice_devlink_rate_init_tx_topology(devlink, ice_get_main_vsi(pf));
+
+	return 0;
+
+err:
+	ice_repr_rem_from_all_vfs(pf);
+
+	return err;
 }
 
 /**

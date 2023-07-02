@@ -37,6 +37,7 @@ AMDKFD_FILES	:= $(AMDKFD_PATH)/kfd_module.o \
 		$(AMDKFD_PATH)/kfd_mqd_manager_vi.o \
 		$(AMDKFD_PATH)/kfd_mqd_manager_v9.o \
 		$(AMDKFD_PATH)/kfd_mqd_manager_v10.o \
+		$(AMDKFD_PATH)/kfd_mqd_manager_v11.o \
 		$(AMDKFD_PATH)/kfd_kernel_queue.o \
 		$(AMDKFD_PATH)/kfd_packet_manager.o \
 		$(AMDKFD_PATH)/kfd_packet_manager_vi.o \
@@ -47,14 +48,16 @@ AMDKFD_FILES	:= $(AMDKFD_PATH)/kfd_module.o \
 		$(AMDKFD_PATH)/kfd_device_queue_manager_vi.o \
 		$(AMDKFD_PATH)/kfd_device_queue_manager_v9.o \
 		$(AMDKFD_PATH)/kfd_device_queue_manager_v10.o \
+		$(AMDKFD_PATH)/kfd_device_queue_manager_v11.o \
 		$(AMDKFD_PATH)/kfd_interrupt.o \
 		$(AMDKFD_PATH)/kfd_events.o \
 		$(AMDKFD_PATH)/cik_event_interrupt.o \
 		$(AMDKFD_PATH)/kfd_int_process_v9.o \
-		$(AMDKFD_PATH)/kfd_dbgdev.o \
-		$(AMDKFD_PATH)/kfd_dbgmgr.o \
+		$(AMDKFD_PATH)/kfd_int_process_v10.o \
+		$(AMDKFD_PATH)/kfd_int_process_v11.o \
 		$(AMDKFD_PATH)/kfd_smi_events.o \
-		$(AMDKFD_PATH)/kfd_crat.o
+		$(AMDKFD_PATH)/kfd_crat.o \
+		$(AMDKFD_PATH)/kfd_debug.o
 
 ifneq ($(CONFIG_AMD_IOMMU_V2),)
 AMDKFD_FILES += $(AMDKFD_PATH)/kfd_iommu.o

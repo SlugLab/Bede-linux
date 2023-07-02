@@ -15,8 +15,10 @@ powerpc
     cxl
     cxlflash
     dawr-power9
+    dexcr
     dscr
     eeh-pci-error-recovery
+    elf_hwcaps
     elfnote
     firmware-assisted-dump
     hvcs

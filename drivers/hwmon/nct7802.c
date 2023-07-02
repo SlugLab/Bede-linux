@@ -1038,7 +1038,7 @@ static int nct7802_detect(struct i2c_client *client,
 	if (reg < 0 || (reg & 0x3f))
 		return -ENODEV;
 
-	strlcpy(info->type, "nct7802", I2C_NAME_SIZE);
+	strscpy(info->type, "nct7802", I2C_NAME_SIZE);
 	return 0;
 }
 
@@ -1223,7 +1223,7 @@ static struct i2c_driver nct7802_driver = {
 		.name = DRVNAME,
 	},
 	.detect = nct7802_detect,
-	.probe_new = nct7802_probe,
+	.probe = nct7802_probe,
 	.id_table = nct7802_idtable,
 	.address_list = nct7802_address_list,
 };

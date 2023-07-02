@@ -7,9 +7,9 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
-#include <linux/of_graph.h>
 #include <linux/pm_runtime.h>
 #include <linux/pm.h>
+#include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -1472,21 +1472,26 @@ static int hi846_init_controls(struct hi846 *hi846)
 	if (ctrl_hdlr->error) {
 		dev_err(&client->dev, "v4l ctrl handler error: %d\n",
 			ctrl_hdlr->error);
-		return ctrl_hdlr->error;
+		ret = ctrl_hdlr->error;
+		goto error;
 	}
 
 	ret = v4l2_fwnode_device_parse(&client->dev, &props);
 	if (ret)
-		return ret;
+		goto error;
 
 	ret = v4l2_ctrl_new_fwnode_properties(ctrl_hdlr, &hi846_ctrl_ops,
 					      &props);
 	if (ret)
-		return ret;
+		goto error;
 
 	hi846->sd.ctrl_handler = ctrl_hdlr;
 
 	return 0;
+
+error:
+	v4l2_ctrl_handler_free(ctrl_hdlr);
+	return ret;
 }
 
 static int hi846_set_video_mode(struct hi846 *hi846, int fps)
@@ -1656,7 +1661,7 @@ err_reg:
 	return ret;
 }
 
-static void hi846_power_off(struct hi846 *hi846)
+static int hi846_power_off(struct hi846 *hi846)
 {
 	if (hi846->rst_gpio)
 		gpiod_set_value_cansleep(hi846->rst_gpio, 1);
@@ -1665,7 +1670,7 @@ static void hi846_power_off(struct hi846 *hi846)
 		gpiod_set_value_cansleep(hi846->shutdown_gpio, 1);
 
 	clk_disable_unprepare(hi846->clock);
-	regulator_bulk_disable(HI846_NUM_SUPPLIES, hi846->supplies);
+	return regulator_bulk_disable(HI846_NUM_SUPPLIES, hi846->supplies);
 }
 
 static int __maybe_unused hi846_suspend(struct device *dev)
@@ -1677,9 +1682,7 @@ static int __maybe_unused hi846_suspend(struct device *dev)
 	if (hi846->streaming)
 		hi846_stop_streaming(hi846);
 
-	hi846_power_off(hi846);
-
-	return 0;
+	return hi846_power_off(hi846);
 }
 
 static int __maybe_unused hi846_resume(struct device *dev)
@@ -2010,22 +2013,24 @@ static int hi846_parse_dt(struct hi846 *hi846, struct device *dev)
 	    bus_cfg.bus.mipi_csi2.num_data_lanes != 4) {
 		dev_err(dev, "number of CSI2 data lanes %d is not supported",
 			bus_cfg.bus.mipi_csi2.num_data_lanes);
-		v4l2_fwnode_endpoint_free(&bus_cfg);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto check_hwcfg_error;
 	}
 
 	hi846->nr_lanes = bus_cfg.bus.mipi_csi2.num_data_lanes;
 
 	if (!bus_cfg.nr_of_link_frequencies) {
 		dev_err(dev, "link-frequency property not found in DT\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto check_hwcfg_error;
 	}
 
 	/* Check that link frequences for all the modes are in device tree */
 	fq = hi846_check_link_freqs(hi846, &bus_cfg);
 	if (fq) {
 		dev_err(dev, "Link frequency of %lld is not supported\n", fq);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto check_hwcfg_error;
 	}
 
 	v4l2_fwnode_endpoint_free(&bus_cfg);
@@ -2046,6 +2051,10 @@ static int hi846_parse_dt(struct hi846 *hi846, struct device *dev)
 	}
 
 	return 0;
+
+check_hwcfg_error:
+	v4l2_fwnode_endpoint_free(&bus_cfg);
+	return ret;
 }
 
 static int hi846_probe(struct i2c_client *client)
@@ -2145,7 +2154,7 @@ err_mutex:
 	return ret;
 }
 
-static int hi846_remove(struct i2c_client *client)
+static void hi846_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct hi846 *hi846 = to_hi846(sd);
@@ -2160,11 +2169,13 @@ static int hi846_remove(struct i2c_client *client)
 	pm_runtime_set_suspended(&client->dev);
 
 	mutex_destroy(&hi846->mutex);
-
-	return 0;
 }
 
-static UNIVERSAL_DEV_PM_OPS(hi846_pm_ops, hi846_suspend, hi846_resume, NULL);
+static const struct dev_pm_ops hi846_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+	SET_RUNTIME_PM_OPS(hi846_suspend, hi846_resume, NULL)
+};
 
 static const struct of_device_id hi846_of_match[] = {
 	{ .compatible = "hynix,hi846", },
@@ -2176,7 +2187,7 @@ static struct i2c_driver hi846_i2c_driver = {
 	.driver = {
 		.name = "hi846",
 		.pm = &hi846_pm_ops,
-		.of_match_table = of_match_ptr(hi846_of_match),
+		.of_match_table = hi846_of_match,
 	},
 	.probe_new = hi846_probe,
 	.remove = hi846_remove,

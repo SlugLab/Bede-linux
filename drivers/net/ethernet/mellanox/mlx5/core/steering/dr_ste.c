@@ -15,7 +15,8 @@ static u32 dr_ste_crc32_calc(const void *input_data, size_t length)
 {
 	u32 crc = crc32(0, input_data, length);
 
-	return (__force u32)htonl(crc);
+	return (__force u32)((crc >> 24) & 0xff) | ((crc << 8) & 0xff0000) |
+			    ((crc >> 8) & 0xff00) | ((crc << 24) & 0xff000000);
 }
 
 bool mlx5dr_ste_supp_ttl_cs_recalc(struct mlx5dr_cmd_caps *caps)
@@ -25,6 +26,7 @@ bool mlx5dr_ste_supp_ttl_cs_recalc(struct mlx5dr_cmd_caps *caps)
 
 u32 mlx5dr_ste_calc_hash_index(u8 *hw_ste_p, struct mlx5dr_ste_htbl *htbl)
 {
+	u32 num_entries = mlx5dr_icm_pool_get_chunk_num_of_entries(htbl->chunk);
 	struct dr_hw_ste_format *hw_ste = (struct dr_hw_ste_format *)hw_ste_p;
 	u8 masked[DR_STE_SIZE_TAG] = {};
 	u32 crc32, index;
@@ -32,7 +34,7 @@ u32 mlx5dr_ste_calc_hash_index(u8 *hw_ste_p, struct mlx5dr_ste_htbl *htbl)
 	int i;
 
 	/* Don't calculate CRC if the result is predicted */
-	if (htbl->chunk->num_of_entries == 1 || htbl->byte_mask == 0)
+	if (num_entries == 1 || htbl->byte_mask == 0)
 		return 0;
 
 	/* Mask tag using byte mask, bit per byte */
@@ -45,7 +47,7 @@ u32 mlx5dr_ste_calc_hash_index(u8 *hw_ste_p, struct mlx5dr_ste_htbl *htbl)
 	}
 
 	crc32 = dr_ste_crc32_calc(masked, DR_STE_SIZE_TAG);
-	index = crc32 & (htbl->chunk->num_of_entries - 1);
+	index = crc32 & (num_entries - 1);
 
 	return index;
 }
@@ -89,6 +91,16 @@ static void dr_ste_set_always_miss(struct dr_hw_ste_format *hw_ste)
 	hw_ste->mask[0] = 0;
 }
 
+bool mlx5dr_ste_is_miss_addr_set(struct mlx5dr_ste_ctx *ste_ctx,
+				 u8 *hw_ste_p)
+{
+	if (!ste_ctx->is_miss_addr_set)
+		return false;
+
+	/* check if miss address is already set for this type of STE */
+	return ste_ctx->is_miss_addr_set(hw_ste_p);
+}
+
 void mlx5dr_ste_set_miss_addr(struct mlx5dr_ste_ctx *ste_ctx,
 			      u8 *hw_ste_p, u64 miss_addr)
 {
@@ -96,13 +108,11 @@ void mlx5dr_ste_set_miss_addr(struct mlx5dr_ste_ctx *ste_ctx,
 }
 
 static void dr_ste_always_miss_addr(struct mlx5dr_ste_ctx *ste_ctx,
-				    struct mlx5dr_ste *ste, u64 miss_addr)
+				    u8 *hw_ste, u64 miss_addr)
 {
-	u8 *hw_ste_p = ste->hw_ste;
-
-	ste_ctx->set_next_lu_type(hw_ste_p, MLX5DR_STE_LU_TYPE_DONT_CARE);
-	ste_ctx->set_miss_addr(hw_ste_p, miss_addr);
-	dr_ste_set_always_miss((struct dr_hw_ste_format *)ste->hw_ste);
+	ste_ctx->set_next_lu_type(hw_ste, MLX5DR_STE_LU_TYPE_DONT_CARE);
+	ste_ctx->set_miss_addr(hw_ste, miss_addr);
+	dr_ste_set_always_miss((struct dr_hw_ste_format *)hw_ste);
 }
 
 void mlx5dr_ste_set_hit_addr(struct mlx5dr_ste_ctx *ste_ctx,
@@ -113,37 +123,45 @@ void mlx5dr_ste_set_hit_addr(struct mlx5dr_ste_ctx *ste_ctx,
 
 u64 mlx5dr_ste_get_icm_addr(struct mlx5dr_ste *ste)
 {
-	u32 index = ste - ste->htbl->ste_arr;
+	u64 base_icm_addr = mlx5dr_icm_pool_get_chunk_icm_addr(ste->htbl->chunk);
+	u32 index = ste - ste->htbl->chunk->ste_arr;
 
-	return ste->htbl->chunk->icm_addr + DR_STE_SIZE * index;
+	return base_icm_addr + DR_STE_SIZE * index;
 }
 
 u64 mlx5dr_ste_get_mr_addr(struct mlx5dr_ste *ste)
 {
-	u32 index = ste - ste->htbl->ste_arr;
+	u32 index = ste - ste->htbl->chunk->ste_arr;
 
-	return ste->htbl->chunk->mr_addr + DR_STE_SIZE * index;
+	return mlx5dr_icm_pool_get_chunk_mr_addr(ste->htbl->chunk) + DR_STE_SIZE * index;
+}
+
+u8 *mlx5dr_ste_get_hw_ste(struct mlx5dr_ste *ste)
+{
+	u64 index = ste - ste->htbl->chunk->ste_arr;
+
+	return ste->htbl->chunk->hw_ste_arr + DR_STE_SIZE_REDUCED * index;
 }
 
 struct list_head *mlx5dr_ste_get_miss_list(struct mlx5dr_ste *ste)
 {
-	u32 index = ste - ste->htbl->ste_arr;
+	u32 index = ste - ste->htbl->chunk->ste_arr;
 
-	return &ste->htbl->miss_list[index];
+	return &ste->htbl->chunk->miss_list[index];
 }
 
 static void dr_ste_always_hit_htbl(struct mlx5dr_ste_ctx *ste_ctx,
-				   struct mlx5dr_ste *ste,
+				   u8 *hw_ste,
 				   struct mlx5dr_ste_htbl *next_htbl)
 {
 	struct mlx5dr_icm_chunk *chunk = next_htbl->chunk;
-	u8 *hw_ste = ste->hw_ste;
 
 	ste_ctx->set_byte_mask(hw_ste, next_htbl->byte_mask);
 	ste_ctx->set_next_lu_type(hw_ste, next_htbl->lu_type);
-	ste_ctx->set_hit_addr(hw_ste, chunk->icm_addr, chunk->num_of_entries);
+	ste_ctx->set_hit_addr(hw_ste, mlx5dr_icm_pool_get_chunk_icm_addr(chunk),
+			      mlx5dr_icm_pool_get_chunk_num_of_entries(chunk));
 
-	dr_ste_set_always_hit((struct dr_hw_ste_format *)ste->hw_ste);
+	dr_ste_set_always_hit((struct dr_hw_ste_format *)hw_ste);
 }
 
 bool mlx5dr_ste_is_last_in_rule(struct mlx5dr_matcher_rx_tx *nic_matcher,
@@ -166,7 +184,8 @@ bool mlx5dr_ste_is_last_in_rule(struct mlx5dr_matcher_rx_tx *nic_matcher,
  */
 static void dr_ste_replace(struct mlx5dr_ste *dst, struct mlx5dr_ste *src)
 {
-	memcpy(dst->hw_ste, src->hw_ste, DR_STE_SIZE_REDUCED);
+	memcpy(mlx5dr_ste_get_hw_ste(dst), mlx5dr_ste_get_hw_ste(src),
+	       DR_STE_SIZE_REDUCED);
 	dst->next_htbl = src->next_htbl;
 	if (dst->next_htbl)
 		dst->next_htbl->pointing_ste = dst;
@@ -184,18 +203,17 @@ dr_ste_remove_head_ste(struct mlx5dr_ste_ctx *ste_ctx,
 		       struct mlx5dr_ste_htbl *stats_tbl)
 {
 	u8 tmp_data_ste[DR_STE_SIZE] = {};
-	struct mlx5dr_ste tmp_ste = {};
 	u64 miss_addr;
 
-	tmp_ste.hw_ste = tmp_data_ste;
+	miss_addr = mlx5dr_icm_pool_get_chunk_icm_addr(nic_matcher->e_anchor->chunk);
 
 	/* Use temp ste because dr_ste_always_miss_addr
 	 * touches bit_mask area which doesn't exist at ste->hw_ste.
+	 * Need to use a full-sized (DR_STE_SIZE) hw_ste.
 	 */
-	memcpy(tmp_ste.hw_ste, ste->hw_ste, DR_STE_SIZE_REDUCED);
-	miss_addr = nic_matcher->e_anchor->chunk->icm_addr;
-	dr_ste_always_miss_addr(ste_ctx, &tmp_ste, miss_addr);
-	memcpy(ste->hw_ste, tmp_ste.hw_ste, DR_STE_SIZE_REDUCED);
+	memcpy(tmp_data_ste, mlx5dr_ste_get_hw_ste(ste), DR_STE_SIZE_REDUCED);
+	dr_ste_always_miss_addr(ste_ctx, tmp_data_ste, miss_addr);
+	memcpy(mlx5dr_ste_get_hw_ste(ste), tmp_data_ste, DR_STE_SIZE_REDUCED);
 
 	list_del_init(&ste->miss_list_node);
 
@@ -237,7 +255,7 @@ dr_ste_replace_head_ste(struct mlx5dr_matcher_rx_tx *nic_matcher,
 	mlx5dr_rule_set_last_member(next_ste->rule_rx_tx, ste, false);
 
 	/* Copy all 64 hw_ste bytes */
-	memcpy(hw_ste, ste->hw_ste, DR_STE_SIZE_REDUCED);
+	memcpy(hw_ste, mlx5dr_ste_get_hw_ste(ste), DR_STE_SIZE_REDUCED);
 	sb_idx = ste->ste_chain_location - 1;
 	mlx5dr_ste_set_bit_mask(hw_ste,
 				nic_matcher->ste_builder[sb_idx].bit_mask);
@@ -273,12 +291,13 @@ static void dr_ste_remove_middle_ste(struct mlx5dr_ste_ctx *ste_ctx,
 	if (WARN_ON(!prev_ste))
 		return;
 
-	miss_addr = ste_ctx->get_miss_addr(ste->hw_ste);
-	ste_ctx->set_miss_addr(prev_ste->hw_ste, miss_addr);
+	miss_addr = ste_ctx->get_miss_addr(mlx5dr_ste_get_hw_ste(ste));
+	ste_ctx->set_miss_addr(mlx5dr_ste_get_hw_ste(prev_ste), miss_addr);
 
 	mlx5dr_send_fill_and_append_ste_send_info(prev_ste, DR_STE_SIZE_CTRL, 0,
-						  prev_ste->hw_ste, ste_info,
-						  send_ste_list, true /* Copy data*/);
+						  mlx5dr_ste_get_hw_ste(prev_ste),
+						  ste_info, send_ste_list,
+						  true /* Copy data*/);
 
 	list_del_init(&ste->miss_list_node);
 
@@ -364,9 +383,11 @@ void mlx5dr_ste_set_hit_addr_by_next_htbl(struct mlx5dr_ste_ctx *ste_ctx,
 					  u8 *hw_ste,
 					  struct mlx5dr_ste_htbl *next_htbl)
 {
-	struct mlx5dr_icm_chunk *chunk = next_htbl->chunk;
+	u64 icm_addr = mlx5dr_icm_pool_get_chunk_icm_addr(next_htbl->chunk);
+	u32 num_entries =
+		mlx5dr_icm_pool_get_chunk_num_of_entries(next_htbl->chunk);
 
-	ste_ctx->set_hit_addr(hw_ste, chunk->icm_addr, chunk->num_of_entries);
+	ste_ctx->set_hit_addr(hw_ste, icm_addr, num_entries);
 }
 
 void mlx5dr_ste_prepare_for_postsend(struct mlx5dr_ste_ctx *ste_ctx,
@@ -385,15 +406,22 @@ void mlx5dr_ste_set_formatted_ste(struct mlx5dr_ste_ctx *ste_ctx,
 				  struct mlx5dr_htbl_connect_info *connect_info)
 {
 	bool is_rx = nic_type == DR_DOMAIN_NIC_TYPE_RX;
-	struct mlx5dr_ste ste = {};
+	u8 tmp_hw_ste[DR_STE_SIZE] = {0};
 
 	ste_ctx->ste_init(formatted_ste, htbl->lu_type, is_rx, gvmi);
-	ste.hw_ste = formatted_ste;
 
+	/* Use temp ste because dr_ste_always_miss_addr/hit_htbl
+	 * touches bit_mask area which doesn't exist at ste->hw_ste.
+	 * Need to use a full-sized (DR_STE_SIZE) hw_ste.
+	 */
+	memcpy(tmp_hw_ste, formatted_ste, DR_STE_SIZE_REDUCED);
 	if (connect_info->type == CONNECT_HIT)
-		dr_ste_always_hit_htbl(ste_ctx, &ste, connect_info->hit_next_htbl);
+		dr_ste_always_hit_htbl(ste_ctx, tmp_hw_ste,
+				       connect_info->hit_next_htbl);
 	else
-		dr_ste_always_miss_addr(ste_ctx, &ste, connect_info->miss_icm_addr);
+		dr_ste_always_miss_addr(ste_ctx, tmp_hw_ste,
+					connect_info->miss_icm_addr);
+	memcpy(formatted_ste, tmp_hw_ste, DR_STE_SIZE_REDUCED);
 }
 
 int mlx5dr_ste_htbl_init_and_postsend(struct mlx5dr_domain *dmn,
@@ -444,7 +472,8 @@ int mlx5dr_ste_create_next_htbl(struct mlx5dr_matcher *matcher,
 
 		/* Write new table to HW */
 		info.type = CONNECT_MISS;
-		info.miss_icm_addr = nic_matcher->e_anchor->chunk->icm_addr;
+		info.miss_icm_addr =
+			mlx5dr_icm_pool_get_chunk_icm_addr(nic_matcher->e_anchor->chunk);
 		if (mlx5dr_ste_htbl_init_and_postsend(dmn, nic_dmn, next_htbl,
 						      &info, false)) {
 			mlx5dr_info(dmn, "Failed writing table to HW\n");
@@ -470,9 +499,10 @@ struct mlx5dr_ste_htbl *mlx5dr_ste_htbl_alloc(struct mlx5dr_icm_pool *pool,
 {
 	struct mlx5dr_icm_chunk *chunk;
 	struct mlx5dr_ste_htbl *htbl;
+	u32 num_entries;
 	int i;
 
-	htbl = kzalloc(sizeof(*htbl), GFP_KERNEL);
+	htbl = mlx5dr_icm_pool_alloc_htbl(pool);
 	if (!htbl)
 		return NULL;
 
@@ -483,36 +513,38 @@ struct mlx5dr_ste_htbl *mlx5dr_ste_htbl_alloc(struct mlx5dr_icm_pool *pool,
 	htbl->chunk = chunk;
 	htbl->lu_type = lu_type;
 	htbl->byte_mask = byte_mask;
-	htbl->ste_arr = chunk->ste_arr;
-	htbl->hw_ste_arr = chunk->hw_ste_arr;
-	htbl->miss_list = chunk->miss_list;
 	htbl->refcount = 0;
+	htbl->pointing_ste = NULL;
+	htbl->ctrl.num_of_valid_entries = 0;
+	htbl->ctrl.num_of_collisions = 0;
+	num_entries = mlx5dr_icm_pool_get_chunk_num_of_entries(chunk);
 
-	for (i = 0; i < chunk->num_of_entries; i++) {
-		struct mlx5dr_ste *ste = &htbl->ste_arr[i];
+	for (i = 0; i < num_entries; i++) {
+		struct mlx5dr_ste *ste = &chunk->ste_arr[i];
 
-		ste->hw_ste = htbl->hw_ste_arr + i * DR_STE_SIZE_REDUCED;
 		ste->htbl = htbl;
 		ste->refcount = 0;
 		INIT_LIST_HEAD(&ste->miss_list_node);
-		INIT_LIST_HEAD(&htbl->miss_list[i]);
+		INIT_LIST_HEAD(&chunk->miss_list[i]);
 	}
 
-	htbl->chunk_size = chunk_size;
 	return htbl;
 
 out_free_htbl:
-	kfree(htbl);
+	mlx5dr_icm_pool_free_htbl(pool, htbl);
 	return NULL;
 }
 
 int mlx5dr_ste_htbl_free(struct mlx5dr_ste_htbl *htbl)
 {
+	struct mlx5dr_icm_pool *pool = htbl->chunk->buddy_mem->pool;
+
 	if (htbl->refcount)
 		return -EBUSY;
 
 	mlx5dr_icm_free_chunk(htbl->chunk);
-	kfree(htbl);
+	mlx5dr_icm_pool_free_htbl(pool, htbl);
+
 	return 0;
 }
 
@@ -523,8 +555,8 @@ void mlx5dr_ste_set_actions_tx(struct mlx5dr_ste_ctx *ste_ctx,
 			       struct mlx5dr_ste_actions_attr *attr,
 			       u32 *added_stes)
 {
-	ste_ctx->set_actions_tx(dmn, action_type_set, hw_ste_arr,
-				attr, added_stes);
+	ste_ctx->set_actions_tx(dmn, action_type_set, ste_ctx->actions_caps,
+				hw_ste_arr, attr, added_stes);
 }
 
 void mlx5dr_ste_set_actions_rx(struct mlx5dr_ste_ctx *ste_ctx,
@@ -534,8 +566,8 @@ void mlx5dr_ste_set_actions_rx(struct mlx5dr_ste_ctx *ste_ctx,
 			       struct mlx5dr_ste_actions_attr *attr,
 			       u32 *added_stes)
 {
-	ste_ctx->set_actions_rx(dmn, action_type_set, hw_ste_arr,
-				attr, added_stes);
+	ste_ctx->set_actions_rx(dmn, action_type_set, ste_ctx->actions_caps,
+				hw_ste_arr, attr, added_stes);
 }
 
 const struct mlx5dr_ste_action_modify_field *
@@ -602,12 +634,91 @@ int mlx5dr_ste_set_action_decap_l3_list(struct mlx5dr_ste_ctx *ste_ctx,
 						 used_hw_action_num);
 }
 
+static int
+dr_ste_alloc_modify_hdr_chunk(struct mlx5dr_action *action)
+{
+	struct mlx5dr_domain *dmn = action->rewrite->dmn;
+	u32 chunk_size;
+	int ret;
+
+	chunk_size = ilog2(roundup_pow_of_two(action->rewrite->num_of_actions));
+
+	/* HW modify action index granularity is at least 64B */
+	chunk_size = max_t(u32, chunk_size, DR_CHUNK_SIZE_8);
+
+	action->rewrite->chunk = mlx5dr_icm_alloc_chunk(dmn->action_icm_pool,
+							chunk_size);
+	if (!action->rewrite->chunk)
+		return -ENOMEM;
+
+	action->rewrite->index = (mlx5dr_icm_pool_get_chunk_icm_addr(action->rewrite->chunk) -
+				  dmn->info.caps.hdr_modify_icm_addr) /
+				 DR_ACTION_CACHE_LINE_SIZE;
+
+	ret = mlx5dr_send_postsend_action(action->rewrite->dmn, action);
+	if (ret)
+		goto free_chunk;
+
+	return 0;
+
+free_chunk:
+	mlx5dr_icm_free_chunk(action->rewrite->chunk);
+	return -ENOMEM;
+}
+
+static void dr_ste_free_modify_hdr_chunk(struct mlx5dr_action *action)
+{
+	mlx5dr_icm_free_chunk(action->rewrite->chunk);
+}
+
+int mlx5dr_ste_alloc_modify_hdr(struct mlx5dr_action *action)
+{
+	struct mlx5dr_domain *dmn = action->rewrite->dmn;
+
+	if (mlx5dr_domain_is_support_ptrn_arg(dmn))
+		return dmn->ste_ctx->alloc_modify_hdr_chunk(action);
+
+	return dr_ste_alloc_modify_hdr_chunk(action);
+}
+
+void mlx5dr_ste_free_modify_hdr(struct mlx5dr_action *action)
+{
+	struct mlx5dr_domain *dmn = action->rewrite->dmn;
+
+	if (mlx5dr_domain_is_support_ptrn_arg(dmn))
+		return dmn->ste_ctx->dealloc_modify_hdr_chunk(action);
+
+	return dr_ste_free_modify_hdr_chunk(action);
+}
+
+static int dr_ste_build_pre_check_spec(struct mlx5dr_domain *dmn,
+				       struct mlx5dr_match_spec *spec)
+{
+	if (spec->ip_version) {
+		if (spec->ip_version != 0xf) {
+			mlx5dr_err(dmn,
+				   "Partial ip_version mask with src/dst IP is not supported\n");
+			return -EINVAL;
+		}
+	} else if (spec->ethertype != 0xffff &&
+		   (DR_MASK_IS_SRC_IP_SET(spec) || DR_MASK_IS_DST_IP_SET(spec))) {
+		mlx5dr_err(dmn,
+			   "Partial/no ethertype mask with src/dst IP is not supported\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 int mlx5dr_ste_build_pre_check(struct mlx5dr_domain *dmn,
 			       u8 match_criteria,
 			       struct mlx5dr_match_param *mask,
 			       struct mlx5dr_match_param *value)
 {
-	if (!value && (match_criteria & DR_MATCHER_CRITERIA_MISC)) {
+	if (value)
+		return 0;
+
+	if (match_criteria & DR_MATCHER_CRITERIA_MISC) {
 		if (mask->misc.source_port && mask->misc.source_port != 0xffff) {
 			mlx5dr_err(dmn,
 				   "Partial mask source_port is not supported\n");
@@ -620,6 +731,14 @@ int mlx5dr_ste_build_pre_check(struct mlx5dr_domain *dmn,
 			return -EINVAL;
 		}
 	}
+
+	if ((match_criteria & DR_MATCHER_CRITERIA_OUTER) &&
+	    dr_ste_build_pre_check_spec(dmn, &mask->outer))
+		return -EINVAL;
+
+	if ((match_criteria & DR_MATCHER_CRITERIA_INNER) &&
+	    dr_ste_build_pre_check_spec(dmn, &mask->inner))
+		return -EINVAL;
 
 	return 0;
 }
@@ -719,6 +838,8 @@ static void dr_ste_copy_mask_misc(char *mask, struct mlx5dr_match_misc *spec, bo
 	spec->vxlan_vni = IFC_GET_CLR(fte_match_set_misc, mask, vxlan_vni, clr);
 
 	spec->geneve_vni = IFC_GET_CLR(fte_match_set_misc, mask, geneve_vni, clr);
+	spec->geneve_tlv_option_0_exist =
+		IFC_GET_CLR(fte_match_set_misc, mask, geneve_tlv_option_0_exist, clr);
 	spec->geneve_oam = IFC_GET_CLR(fte_match_set_misc, mask, geneve_oam, clr);
 
 	spec->outer_ipv6_flow_label =
@@ -761,6 +882,7 @@ static void dr_ste_copy_mask_spec(char *mask, struct mlx5dr_match_spec *spec, bo
 	spec->tcp_sport = IFC_GET_CLR(fte_match_set_lyr_2_4, mask, tcp_sport, clr);
 	spec->tcp_dport = IFC_GET_CLR(fte_match_set_lyr_2_4, mask, tcp_dport, clr);
 
+	spec->ipv4_ihl = IFC_GET_CLR(fte_match_set_lyr_2_4, mask, ipv4_ihl, clr);
 	spec->ttl_hoplimit = IFC_GET_CLR(fte_match_set_lyr_2_4, mask, ttl_hoplimit, clr);
 
 	spec->udp_sport = IFC_GET_CLR(fte_match_set_lyr_2_4, mask, udp_sport, clr);
@@ -880,6 +1002,26 @@ static void dr_ste_copy_mask_misc4(char *mask, struct mlx5dr_match_misc4 *spec, 
 		IFC_GET_CLR(fte_match_set_misc4, mask, prog_sample_field_value_3, clr);
 }
 
+static void dr_ste_copy_mask_misc5(char *mask, struct mlx5dr_match_misc5 *spec, bool clr)
+{
+	spec->macsec_tag_0 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, macsec_tag_0, clr);
+	spec->macsec_tag_1 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, macsec_tag_1, clr);
+	spec->macsec_tag_2 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, macsec_tag_2, clr);
+	spec->macsec_tag_3 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, macsec_tag_3, clr);
+	spec->tunnel_header_0 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, tunnel_header_0, clr);
+	spec->tunnel_header_1 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, tunnel_header_1, clr);
+	spec->tunnel_header_2 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, tunnel_header_2, clr);
+	spec->tunnel_header_3 =
+		IFC_GET_CLR(fte_match_set_misc5, mask, tunnel_header_3, clr);
+}
+
 void mlx5dr_ste_copy_param(u8 match_criteria,
 			   struct mlx5dr_match_param *set_param,
 			   struct mlx5dr_match_parameters *mask,
@@ -965,6 +1107,20 @@ void mlx5dr_ste_copy_param(u8 match_criteria,
 			buff = data + param_location;
 		}
 		dr_ste_copy_mask_misc4(buff, &set_param->misc4, clr);
+	}
+
+	param_location += sizeof(struct mlx5dr_match_misc4);
+
+	if (match_criteria & DR_MATCHER_CRITERIA_MISC5) {
+		if (mask->match_sz < param_location +
+		    sizeof(struct mlx5dr_match_misc5)) {
+			memcpy(tail_param, data + param_location,
+			       mask->match_sz - param_location);
+			buff = tail_param;
+		} else {
+			buff = data + param_location;
+		}
+		dr_ste_copy_mask_misc5(buff, &set_param->misc5, clr);
 	}
 }
 
@@ -1180,6 +1336,21 @@ void mlx5dr_ste_build_tnl_geneve_tlv_opt(struct mlx5dr_ste_ctx *ste_ctx,
 	ste_ctx->build_tnl_geneve_tlv_opt_init(sb, mask);
 }
 
+void mlx5dr_ste_build_tnl_geneve_tlv_opt_exist(struct mlx5dr_ste_ctx *ste_ctx,
+					       struct mlx5dr_ste_build *sb,
+					       struct mlx5dr_match_param *mask,
+					       struct mlx5dr_cmd_caps *caps,
+					       bool inner, bool rx)
+{
+	if (!ste_ctx->build_tnl_geneve_tlv_opt_exist_init)
+		return;
+
+	sb->rx = rx;
+	sb->caps = caps;
+	sb->inner = inner;
+	ste_ctx->build_tnl_geneve_tlv_opt_exist_init(sb, mask);
+}
+
 void mlx5dr_ste_build_tnl_gtpu(struct mlx5dr_ste_ctx *ste_ctx,
 			       struct mlx5dr_ste_build *sb,
 			       struct mlx5dr_match_param *mask,
@@ -1269,15 +1440,24 @@ void mlx5dr_ste_build_flex_parser_1(struct mlx5dr_ste_ctx *ste_ctx,
 	ste_ctx->build_flex_parser_1_init(sb, mask);
 }
 
-static struct mlx5dr_ste_ctx *mlx5dr_ste_ctx_arr[] = {
-	[MLX5_STEERING_FORMAT_CONNECTX_5] = &ste_ctx_v0,
-	[MLX5_STEERING_FORMAT_CONNECTX_6DX] = &ste_ctx_v1,
-};
+void mlx5dr_ste_build_tnl_header_0_1(struct mlx5dr_ste_ctx *ste_ctx,
+				     struct mlx5dr_ste_build *sb,
+				     struct mlx5dr_match_param *mask,
+				     bool inner, bool rx)
+{
+	sb->rx = rx;
+	sb->inner = inner;
+	ste_ctx->build_tnl_header_0_1_init(sb, mask);
+}
 
 struct mlx5dr_ste_ctx *mlx5dr_ste_get_ctx(u8 version)
 {
-	if (version > MLX5_STEERING_FORMAT_CONNECTX_6DX)
-		return NULL;
+	if (version == MLX5_STEERING_FORMAT_CONNECTX_5)
+		return mlx5dr_ste_get_ctx_v0();
+	else if (version == MLX5_STEERING_FORMAT_CONNECTX_6DX)
+		return mlx5dr_ste_get_ctx_v1();
+	else if (version == MLX5_STEERING_FORMAT_CONNECTX_7)
+		return mlx5dr_ste_get_ctx_v2();
 
-	return mlx5dr_ste_ctx_arr[version];
+	return NULL;
 }

@@ -303,6 +303,7 @@ static struct atari_floppy_struct {
 	int ref;
 	int type;
 	struct blk_mq_tag_set tag_set;
+	int error_count;
 } unit[FD_MAX_UNITS];
 
 #define	UD	unit[drive]
@@ -441,13 +442,13 @@ static void fd_times_out(struct timer_list *unused);
 static void finish_fdc( void );
 static void finish_fdc_done( int dummy );
 static void setup_req_params( int drive );
-static int fd_locked_ioctl(struct block_device *bdev, fmode_t mode, unsigned int
-                     cmd, unsigned long param);
+static int fd_locked_ioctl(struct block_device *bdev, blk_mode_t mode,
+		unsigned int cmd, unsigned long param);
 static void fd_probe( int drive );
 static int fd_test_drive_present( int drive );
 static void config_types( void );
-static int floppy_open(struct block_device *bdev, fmode_t mode);
-static void floppy_release(struct gendisk *disk, fmode_t mode);
+static int floppy_open(struct gendisk *disk, blk_mode_t mode);
+static void floppy_release(struct gendisk *disk);
 
 /************************* End of Prototypes **************************/
 
@@ -705,14 +706,14 @@ static void fd_error( void )
 	if (!fd_request)
 		return;
 
-	fd_request->error_count++;
-	if (fd_request->error_count >= MAX_ERRORS) {
+	unit[SelectedDrive].error_count++;
+	if (unit[SelectedDrive].error_count >= MAX_ERRORS) {
 		printk(KERN_ERR "fd%d: too many errors.\n", SelectedDrive );
 		fd_end_request_cur(BLK_STS_IOERR);
 		finish_fdc();
 		return;
 	}
-	else if (fd_request->error_count == RECALIBRATE_ERRORS) {
+	else if (unit[SelectedDrive].error_count == RECALIBRATE_ERRORS) {
 		printk(KERN_WARNING "fd%d: recalibrating\n", SelectedDrive );
 		if (SelectedDrive != -1)
 			SUD.track = -1;
@@ -1491,7 +1492,7 @@ static void setup_req_params( int drive )
 	ReqData = ReqBuffer + 512 * ReqCnt;
 
 	if (UseTrackbuffer)
-		read_track = (ReqCmd == READ && fd_request->error_count == 0);
+		read_track = (ReqCmd == READ && unit[drive].error_count == 0);
 	else
 		read_track = 0;
 
@@ -1502,7 +1503,7 @@ static void setup_req_params( int drive )
 static blk_status_t ataflop_queue_rq(struct blk_mq_hw_ctx *hctx,
 				     const struct blk_mq_queue_data *bd)
 {
-	struct atari_floppy_struct *floppy = bd->rq->rq_disk->private_data;
+	struct atari_floppy_struct *floppy = bd->rq->q->disk->private_data;
 	int drive = floppy - unit;
 	int type = floppy->type;
 
@@ -1520,6 +1521,7 @@ static blk_status_t ataflop_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return BLK_STS_RESOURCE;
 	}
 	fd_request = bd->rq;
+	unit[drive].error_count = 0;
 	blk_mq_start_request(fd_request);
 
 	atari_disable_irq( IRQ_MFP_FDC );
@@ -1538,7 +1540,7 @@ static blk_status_t ataflop_queue_rq(struct blk_mq_hw_ctx *hctx,
 		if (!UDT) {
 			Probing = 1;
 			UDT = atari_disk_type + StartDiskType[DriveType];
-			set_capacity(bd->rq->rq_disk, UDT->blocks);
+			set_capacity(bd->rq->q->disk, UDT->blocks);
 			UD.autoprobe = 1;
 		}
 	} 
@@ -1558,7 +1560,7 @@ static blk_status_t ataflop_queue_rq(struct blk_mq_hw_ctx *hctx,
 		}
 		type = minor2disktype[type].index;
 		UDT = &atari_disk_type[type];
-		set_capacity(bd->rq->rq_disk, UDT->blocks);
+		set_capacity(bd->rq->q->disk, UDT->blocks);
 		UD.autoprobe = 0;
 	}
 
@@ -1579,7 +1581,7 @@ out:
 	return BLK_STS_OK;
 }
 
-static int fd_locked_ioctl(struct block_device *bdev, fmode_t mode,
+static int fd_locked_ioctl(struct block_device *bdev, blk_mode_t mode,
 		    unsigned int cmd, unsigned long param)
 {
 	struct gendisk *disk = bdev->bd_disk;
@@ -1758,15 +1760,15 @@ static int fd_locked_ioctl(struct block_device *bdev, fmode_t mode,
 		/* invalidate the buffer track to force a reread */
 		BufferDrive = -1;
 		set_bit(drive, &fake_change);
-		if (bdev_check_media_change(bdev))
-			floppy_revalidate(bdev->bd_disk);
+		if (disk_check_media_change(disk))
+			floppy_revalidate(disk);
 		return 0;
 	default:
 		return -EINVAL;
 	}
 }
 
-static int fd_ioctl(struct block_device *bdev, fmode_t mode,
+static int fd_ioctl(struct block_device *bdev, blk_mode_t mode,
 			     unsigned int cmd, unsigned long arg)
 {
 	int ret;
@@ -1913,32 +1915,31 @@ static void __init config_types( void )
  * drive with different device numbers.
  */
 
-static int floppy_open(struct block_device *bdev, fmode_t mode)
+static int floppy_open(struct gendisk *disk, blk_mode_t mode)
 {
-	struct atari_floppy_struct *p = bdev->bd_disk->private_data;
-	int type  = MINOR(bdev->bd_dev) >> 2;
+	struct atari_floppy_struct *p = disk->private_data;
+	int type = disk->first_minor >> 2;
 
 	DPRINT(("fd_open: type=%d\n",type));
 	if (p->ref && p->type != type)
 		return -EBUSY;
 
-	if (p->ref == -1 || (p->ref && mode & FMODE_EXCL))
+	if (p->ref == -1 || (p->ref && mode & BLK_OPEN_EXCL))
 		return -EBUSY;
-
-	if (mode & FMODE_EXCL)
+	if (mode & BLK_OPEN_EXCL)
 		p->ref = -1;
 	else
 		p->ref++;
 
 	p->type = type;
 
-	if (mode & FMODE_NDELAY)
+	if (mode & BLK_OPEN_NDELAY)
 		return 0;
 
-	if (mode & (FMODE_READ|FMODE_WRITE)) {
-		if (bdev_check_media_change(bdev))
-			floppy_revalidate(bdev->bd_disk);
-		if (mode & FMODE_WRITE) {
+	if (mode & (BLK_OPEN_READ | BLK_OPEN_WRITE)) {
+		if (disk_check_media_change(disk))
+			floppy_revalidate(disk);
+		if (mode & BLK_OPEN_WRITE) {
 			if (p->wpstat) {
 				if (p->ref < 0)
 					p->ref = 0;
@@ -1951,18 +1952,18 @@ static int floppy_open(struct block_device *bdev, fmode_t mode)
 	return 0;
 }
 
-static int floppy_unlocked_open(struct block_device *bdev, fmode_t mode)
+static int floppy_unlocked_open(struct gendisk *disk, blk_mode_t mode)
 {
 	int ret;
 
 	mutex_lock(&ataflop_mutex);
-	ret = floppy_open(bdev, mode);
+	ret = floppy_open(disk, mode);
 	mutex_unlock(&ataflop_mutex);
 
 	return ret;
 }
 
-static void floppy_release(struct gendisk *disk, fmode_t mode)
+static void floppy_release(struct gendisk *disk)
 {
 	struct atari_floppy_struct *p = disk->private_data;
 	mutex_lock(&ataflop_mutex);
@@ -2000,6 +2001,7 @@ static int ataflop_alloc_disk(unsigned int drive, unsigned int type)
 	disk->minors = 1;
 	sprintf(disk->disk_name, "fd%d", drive);
 	disk->fops = &floppy_fops;
+	disk->flags |= GENHD_FL_NO_PART;
 	disk->events = DISK_EVENT_MEDIA_CHANGE;
 	disk->private_data = &unit[drive];
 	set_capacity(disk, MAX_DISK_SIZE * 2);
@@ -2028,7 +2030,7 @@ static void ataflop_probe(dev_t dev)
 	return;
 
 cleanup_disk:
-	blk_cleanup_disk(unit[drive].disk[type]);
+	put_disk(unit[drive].disk[type]);
 	unit[drive].disk[type] = NULL;
 }
 
@@ -2042,7 +2044,6 @@ static void atari_floppy_cleanup(void)
 			if (!unit[i].disk[type])
 				continue;
 			del_gendisk(unit[i].disk[type]);
-			blk_cleanup_queue(unit[i].disk[type]->queue);
 			put_disk(unit[i].disk[type]);
 		}
 		blk_mq_free_tag_set(&unit[i].tag_set);
@@ -2061,7 +2062,7 @@ static void atari_cleanup_floppy_disk(struct atari_floppy_struct *fs)
 			continue;
 		if (fs->registered[type])
 			del_gendisk(fs->disk[type]);
-		blk_cleanup_disk(fs->disk[type]);
+		put_disk(fs->disk[type]);
 	}
 	blk_mq_free_tag_set(&fs->tag_set);
 }

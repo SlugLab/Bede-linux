@@ -15,4 +15,6 @@ Contents:
    :numbered:
    :maxdepth: 2
 
+   maintainer-netdev
+   maintainer-soc
    maintainer-tip

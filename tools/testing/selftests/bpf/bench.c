@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/sysinfo.h>
-#include <sys/resource.h>
 #include <signal.h>
 #include "bench.h"
 #include "testing_helpers.h"
@@ -17,7 +16,8 @@ struct env env = {
 	.warmup_sec = 1,
 	.duration_sec = 5,
 	.affinity = false,
-	.consumer_cnt = 1,
+	.quiet = false,
+	.consumer_cnt = 0,
 	.producer_cnt = 1,
 };
 
@@ -29,26 +29,10 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 	return vfprintf(stderr, format, args);
 }
 
-static int bump_memlock_rlimit(void)
+void setup_libbpf(void)
 {
-	struct rlimit rlim_new = {
-		.rlim_cur	= RLIM_INFINITY,
-		.rlim_max	= RLIM_INFINITY,
-	};
-
-	return setrlimit(RLIMIT_MEMLOCK, &rlim_new);
-}
-
-void setup_libbpf()
-{
-	int err;
-
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(libbpf_print_fn);
-
-	err = bump_memlock_rlimit();
-	if (err)
-		fprintf(stderr, "failed to increase RLIMIT_MEMLOCK: %d", err);
 }
 
 void false_hits_report_progress(int iter, struct bench_res *res, long delta_ns)
@@ -96,6 +80,43 @@ void hits_drops_report_progress(int iter, struct bench_res *res, long delta_ns)
 	       hits_per_sec, hits_per_prod, drops_per_sec, hits_per_sec + drops_per_sec);
 }
 
+void
+grace_period_latency_basic_stats(struct bench_res res[], int res_cnt, struct basic_stats *gp_stat)
+{
+	int i;
+
+	memset(gp_stat, 0, sizeof(struct basic_stats));
+
+	for (i = 0; i < res_cnt; i++)
+		gp_stat->mean += res[i].gp_ns / 1000.0 / (double)res[i].gp_ct / (0.0 + res_cnt);
+
+#define IT_MEAN_DIFF (res[i].gp_ns / 1000.0 / (double)res[i].gp_ct - gp_stat->mean)
+	if (res_cnt > 1) {
+		for (i = 0; i < res_cnt; i++)
+			gp_stat->stddev += (IT_MEAN_DIFF * IT_MEAN_DIFF) / (res_cnt - 1.0);
+	}
+	gp_stat->stddev = sqrt(gp_stat->stddev);
+#undef IT_MEAN_DIFF
+}
+
+void
+grace_period_ticks_basic_stats(struct bench_res res[], int res_cnt, struct basic_stats *gp_stat)
+{
+	int i;
+
+	memset(gp_stat, 0, sizeof(struct basic_stats));
+	for (i = 0; i < res_cnt; i++)
+		gp_stat->mean += res[i].stime / (double)res[i].gp_ct / (0.0 + res_cnt);
+
+#define IT_MEAN_DIFF (res[i].stime / (double)res[i].gp_ct - gp_stat->mean)
+	if (res_cnt > 1) {
+		for (i = 0; i < res_cnt; i++)
+			gp_stat->stddev += (IT_MEAN_DIFF * IT_MEAN_DIFF) / (res_cnt - 1.0);
+	}
+	gp_stat->stddev = sqrt(gp_stat->stddev);
+#undef IT_MEAN_DIFF
+}
+
 void hits_drops_report_final(struct bench_res res[], int res_cnt)
 {
 	int i;
@@ -134,6 +155,86 @@ void hits_drops_report_final(struct bench_res res[], int res_cnt)
 	       total_ops_mean, total_ops_stddev);
 }
 
+void ops_report_progress(int iter, struct bench_res *res, long delta_ns)
+{
+	double hits_per_sec, hits_per_prod;
+
+	hits_per_sec = res->hits / 1000000.0 / (delta_ns / 1000000000.0);
+	hits_per_prod = hits_per_sec / env.producer_cnt;
+
+	printf("Iter %3d (%7.3lfus): ", iter, (delta_ns - 1000000000) / 1000.0);
+
+	printf("hits %8.3lfM/s (%7.3lfM/prod)\n", hits_per_sec, hits_per_prod);
+}
+
+void ops_report_final(struct bench_res res[], int res_cnt)
+{
+	double hits_mean = 0.0, hits_stddev = 0.0;
+	int i;
+
+	for (i = 0; i < res_cnt; i++)
+		hits_mean += res[i].hits / 1000000.0 / (0.0 + res_cnt);
+
+	if (res_cnt > 1)  {
+		for (i = 0; i < res_cnt; i++)
+			hits_stddev += (hits_mean - res[i].hits / 1000000.0) *
+				       (hits_mean - res[i].hits / 1000000.0) /
+				       (res_cnt - 1.0);
+
+		hits_stddev = sqrt(hits_stddev);
+	}
+	printf("Summary: throughput %8.3lf \u00B1 %5.3lf M ops/s (%7.3lfM ops/prod), ",
+	       hits_mean, hits_stddev, hits_mean / env.producer_cnt);
+	printf("latency %8.3lf ns/op\n", 1000.0 / hits_mean * env.producer_cnt);
+}
+
+void local_storage_report_progress(int iter, struct bench_res *res,
+				   long delta_ns)
+{
+	double important_hits_per_sec, hits_per_sec;
+	double delta_sec = delta_ns / 1000000000.0;
+
+	hits_per_sec = res->hits / 1000000.0 / delta_sec;
+	important_hits_per_sec = res->important_hits / 1000000.0 / delta_sec;
+
+	printf("Iter %3d (%7.3lfus): ", iter, (delta_ns - 1000000000) / 1000.0);
+
+	printf("hits %8.3lfM/s ", hits_per_sec);
+	printf("important_hits %8.3lfM/s\n", important_hits_per_sec);
+}
+
+void local_storage_report_final(struct bench_res res[], int res_cnt)
+{
+	double important_hits_mean = 0.0, important_hits_stddev = 0.0;
+	double hits_mean = 0.0, hits_stddev = 0.0;
+	int i;
+
+	for (i = 0; i < res_cnt; i++) {
+		hits_mean += res[i].hits / 1000000.0 / (0.0 + res_cnt);
+		important_hits_mean += res[i].important_hits / 1000000.0 / (0.0 + res_cnt);
+	}
+
+	if (res_cnt > 1)  {
+		for (i = 0; i < res_cnt; i++) {
+			hits_stddev += (hits_mean - res[i].hits / 1000000.0) *
+				       (hits_mean - res[i].hits / 1000000.0) /
+				       (res_cnt - 1.0);
+			important_hits_stddev +=
+				       (important_hits_mean - res[i].important_hits / 1000000.0) *
+				       (important_hits_mean - res[i].important_hits / 1000000.0) /
+				       (res_cnt - 1.0);
+		}
+
+		hits_stddev = sqrt(hits_stddev);
+		important_hits_stddev = sqrt(important_hits_stddev);
+	}
+	printf("Summary: hits throughput %8.3lf \u00B1 %5.3lf M ops/s, ",
+	       hits_mean, hits_stddev);
+	printf("hits latency %8.3lf ns/op, ", 1000.0 / hits_mean);
+	printf("important_hits throughput %8.3lf \u00B1 %5.3lf M ops/s\n",
+	       important_hits_mean, important_hits_stddev);
+}
+
 const char *argp_program_version = "benchmark";
 const char *argp_program_bug_address = "<bpf@vger.kernel.org>";
 const char argp_program_doc[] =
@@ -162,6 +263,7 @@ static const struct argp_option opts[] = {
 	{ "consumers", 'c', "NUM", 0, "Number of consumer threads"},
 	{ "verbose", 'v', NULL, 0, "Verbose debug output"},
 	{ "affinity", 'a', NULL, 0, "Set consumer/producer thread affinity"},
+	{ "quiet", 'q', NULL, 0, "Be more quiet"},
 	{ "prod-affinity", ARG_PROD_AFFINITY_SET, "CPUSET", 0,
 	  "Set of CPUs for producer threads; implies --affinity"},
 	{ "cons-affinity", ARG_CONS_AFFINITY_SET, "CPUSET", 0,
@@ -171,17 +273,31 @@ static const struct argp_option opts[] = {
 
 extern struct argp bench_ringbufs_argp;
 extern struct argp bench_bloom_map_argp;
+extern struct argp bench_bpf_loop_argp;
+extern struct argp bench_local_storage_argp;
+extern struct argp bench_local_storage_rcu_tasks_trace_argp;
+extern struct argp bench_strncmp_argp;
+extern struct argp bench_hashmap_lookup_argp;
+extern struct argp bench_local_storage_create_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
 	{ &bench_bloom_map_argp, 0, "Bloom filter map benchmark", 0 },
+	{ &bench_bpf_loop_argp, 0, "bpf_loop helper benchmark", 0 },
+	{ &bench_local_storage_argp, 0, "local_storage benchmark", 0 },
+	{ &bench_strncmp_argp, 0, "bpf_strncmp helper benchmark", 0 },
+	{ &bench_local_storage_rcu_tasks_trace_argp, 0,
+		"local_storage RCU Tasks Trace slowdown benchmark", 0 },
+	{ &bench_hashmap_lookup_argp, 0, "Hashmap lookup benchmark", 0 },
+	{ &bench_local_storage_create_argp, 0, "local-storage-create benchmark", 0 },
 	{},
 };
 
+/* Make pos_args global, so that we can run argp_parse twice, if necessary */
+static int pos_args;
+
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-	static int pos_args;
-
 	switch (key) {
 	case 'v':
 		env.verbose = true;
@@ -220,6 +336,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case 'a':
 		env.affinity = true;
 		break;
+	case 'q':
+		env.quiet = true;
+		break;
 	case ARG_PROD_AFFINITY_SET:
 		env.affinity = true;
 		if (parse_num_list(arg, &env.prod_cpus.cpus,
@@ -250,7 +369,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
-static void parse_cmdline_args(int argc, char **argv)
+static void parse_cmdline_args_init(int argc, char **argv)
 {
 	static const struct argp argp = {
 		.options = opts,
@@ -260,9 +379,25 @@ static void parse_cmdline_args(int argc, char **argv)
 	};
 	if (argp_parse(&argp, argc, argv, 0, NULL, NULL))
 		exit(1);
-	if (!env.list && !env.bench_name) {
-		argp_help(&argp, stderr, ARGP_HELP_DOC, "bench");
-		exit(1);
+}
+
+static void parse_cmdline_args_final(int argc, char **argv)
+{
+	struct argp_child bench_parsers[2] = {};
+	const struct argp argp = {
+		.options = opts,
+		.parser = parse_arg,
+		.doc = argp_program_doc,
+		.children = bench_parsers,
+	};
+
+	/* Parse arguments the second time with the correct set of parsers */
+	if (bench->argp) {
+		bench_parsers[0].argp = bench->argp;
+		bench_parsers[0].header = bench->name;
+		pos_args = 0;
+		if (argp_parse(&argp, argc, argv, 0, NULL, NULL))
+			exit(1);
 	}
 }
 
@@ -306,12 +441,14 @@ static void setup_timer()
 static void set_thread_affinity(pthread_t thread, int cpu)
 {
 	cpu_set_t cpuset;
+	int err;
 
 	CPU_ZERO(&cpuset);
 	CPU_SET(cpu, &cpuset);
-	if (pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset)) {
+	err = pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset);
+	if (err) {
 		fprintf(stderr, "setting affinity to CPU #%d failed: %d\n",
-			cpu, errno);
+			cpu, -err);
 		exit(1);
 	}
 }
@@ -332,7 +469,7 @@ static int next_cpu(struct cpu_set *cpu_set)
 		exit(1);
 	}
 
-	return cpu_set->next_cpu++;
+	return cpu_set->next_cpu++ % env.nr_cpus;
 }
 
 static struct bench_state {
@@ -359,6 +496,11 @@ extern const struct bench bench_trig_kprobe;
 extern const struct bench bench_trig_fentry;
 extern const struct bench bench_trig_fentry_sleep;
 extern const struct bench bench_trig_fmodret;
+extern const struct bench bench_trig_uprobe_base;
+extern const struct bench bench_trig_uprobe_with_nop;
+extern const struct bench bench_trig_uretprobe_with_nop;
+extern const struct bench bench_trig_uprobe_without_nop;
+extern const struct bench bench_trig_uretprobe_without_nop;
 extern const struct bench bench_rb_libbpf;
 extern const struct bench bench_rb_custom;
 extern const struct bench bench_pb_libbpf;
@@ -368,6 +510,16 @@ extern const struct bench bench_bloom_update;
 extern const struct bench bench_bloom_false_positive;
 extern const struct bench bench_hashmap_without_bloom;
 extern const struct bench bench_hashmap_with_bloom;
+extern const struct bench bench_bpf_loop;
+extern const struct bench bench_strncmp_no_helper;
+extern const struct bench bench_strncmp_helper;
+extern const struct bench bench_bpf_hashmap_full_update;
+extern const struct bench bench_local_storage_cache_seq_get;
+extern const struct bench bench_local_storage_cache_interleaved_get;
+extern const struct bench bench_local_storage_cache_hashmap_control;
+extern const struct bench bench_local_storage_tasks_trace;
+extern const struct bench bench_bpf_hashmap_lookup;
+extern const struct bench bench_local_storage_create;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -385,6 +537,11 @@ static const struct bench *benchs[] = {
 	&bench_trig_fentry,
 	&bench_trig_fentry_sleep,
 	&bench_trig_fmodret,
+	&bench_trig_uprobe_base,
+	&bench_trig_uprobe_with_nop,
+	&bench_trig_uretprobe_with_nop,
+	&bench_trig_uprobe_without_nop,
+	&bench_trig_uretprobe_without_nop,
 	&bench_rb_libbpf,
 	&bench_rb_custom,
 	&bench_pb_libbpf,
@@ -394,17 +551,26 @@ static const struct bench *benchs[] = {
 	&bench_bloom_false_positive,
 	&bench_hashmap_without_bloom,
 	&bench_hashmap_with_bloom,
+	&bench_bpf_loop,
+	&bench_strncmp_no_helper,
+	&bench_strncmp_helper,
+	&bench_bpf_hashmap_full_update,
+	&bench_local_storage_cache_seq_get,
+	&bench_local_storage_cache_interleaved_get,
+	&bench_local_storage_cache_hashmap_control,
+	&bench_local_storage_tasks_trace,
+	&bench_bpf_hashmap_lookup,
+	&bench_local_storage_create,
 };
 
-static void setup_benchmark()
+static void find_benchmark(void)
 {
-	int i, err;
+	int i;
 
 	if (!env.bench_name) {
 		fprintf(stderr, "benchmark name is not specified\n");
 		exit(1);
 	}
-
 	for (i = 0; i < ARRAY_SIZE(benchs); i++) {
 		if (strcmp(benchs[i]->name, env.bench_name) == 0) {
 			bench = benchs[i];
@@ -415,8 +581,14 @@ static void setup_benchmark()
 		fprintf(stderr, "benchmark '%s' not found\n", env.bench_name);
 		exit(1);
 	}
+}
 
-	printf("Setting up benchmark '%s'...\n", bench->name);
+static void setup_benchmark(void)
+{
+	int i, err;
+
+	if (!env.quiet)
+		printf("Setting up benchmark '%s'...\n", bench->name);
 
 	state.producers = calloc(env.producer_cnt, sizeof(*state.producers));
 	state.consumers = calloc(env.consumer_cnt, sizeof(*state.consumers));
@@ -435,7 +607,7 @@ static void setup_benchmark()
 				     bench->consumer_thread, (void *)(long)i);
 		if (err) {
 			fprintf(stderr, "failed to create consumer thread #%d: %d\n",
-				i, -errno);
+				i, -err);
 			exit(1);
 		}
 		if (env.affinity)
@@ -454,7 +626,7 @@ static void setup_benchmark()
 				     bench->producer_thread, (void *)(long)i);
 		if (err) {
 			fprintf(stderr, "failed to create producer thread #%d: %d\n",
-				i, -errno);
+				i, -err);
 			exit(1);
 		}
 		if (env.affinity)
@@ -462,7 +634,8 @@ static void setup_benchmark()
 					    next_cpu(&env.prod_cpus));
 	}
 
-	printf("Benchmark '%s' started.\n", bench->name);
+	if (!env.quiet)
+		printf("Benchmark '%s' started.\n", bench->name);
 }
 
 static pthread_mutex_t bench_done_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -486,7 +659,8 @@ static void collect_measurements(long delta_ns) {
 
 int main(int argc, char **argv)
 {
-	parse_cmdline_args(argc, argv);
+	env.nr_cpus = get_nprocs();
+	parse_cmdline_args_init(argc, argv);
 
 	if (env.list) {
 		int i;
@@ -497,6 +671,9 @@ int main(int argc, char **argv)
 		}
 		return 0;
 	}
+
+	find_benchmark();
+	parse_cmdline_args_final(argc, argv);
 
 	setup_benchmark();
 

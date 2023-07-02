@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2005-2014, 2020-2021 Intel Corporation
+ * Copyright (C) 2005-2014, 2020-2021, 2023 Intel Corporation
  * Copyright (C) 2013-2014 Intel Mobile Communications GmbH
  */
 #ifndef __iwl_drv_h__
@@ -84,9 +84,16 @@ void iwl_drv_stop(struct iwl_drv *drv);
  * everything is built-in, then we can avoid that.
  */
 #ifdef CONFIG_IWLWIFI_OPMODE_MODULAR
-#define IWL_EXPORT_SYMBOL(sym)	EXPORT_SYMBOL_GPL(sym)
+#define IWL_EXPORT_SYMBOL(sym)	EXPORT_SYMBOL_NS_GPL(sym, IWLWIFI)
 #else
 #define IWL_EXPORT_SYMBOL(sym)
 #endif
+
+/* max retry for init flow */
+#define IWL_MAX_INIT_RETRY 2
+
+#define FW_NAME_PRE_BUFSIZE	64
+struct iwl_trans;
+const char *iwl_drv_get_fwname_pre(struct iwl_trans *trans, char *buf);
 
 #endif /* __iwl_drv_h__ */

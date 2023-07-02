@@ -2,12 +2,26 @@
 #include <linux/extable.h>
 #include <linux/uaccess.h>
 #include <linux/sched/debug.h>
+#include <linux/bitfield.h>
 #include <xen/xen.h>
 
 #include <asm/fpu/api.h>
 #include <asm/sev.h>
 #include <asm/traps.h>
 #include <asm/kdebug.h>
+#include <asm/insn-eval.h>
+#include <asm/sgx.h>
+
+static inline unsigned long *pt_regs_nr(struct pt_regs *regs, int nr)
+{
+	int reg_offset = pt_regs_offset(regs, nr);
+	static unsigned long __dummy;
+
+	if (WARN_ON_ONCE(reg_offset < 0))
+		return &__dummy;
+
+	return (unsigned long *)((unsigned long)regs + reg_offset);
+}
 
 static inline unsigned long
 ex_fixup_addr(const struct exception_table_entry *x)
@@ -15,17 +29,82 @@ ex_fixup_addr(const struct exception_table_entry *x)
 	return (unsigned long)&x->fixup + x->fixup;
 }
 
-static bool ex_handler_default(const struct exception_table_entry *fixup,
+static bool ex_handler_default(const struct exception_table_entry *e,
 			       struct pt_regs *regs)
 {
-	regs->ip = ex_fixup_addr(fixup);
+	if (e->data & EX_FLAG_CLEAR_AX)
+		regs->ax = 0;
+	if (e->data & EX_FLAG_CLEAR_DX)
+		regs->dx = 0;
+
+	regs->ip = ex_fixup_addr(e);
 	return true;
+}
+
+/*
+ * This is the *very* rare case where we do a "load_unaligned_zeropad()"
+ * and it's a page crosser into a non-existent page.
+ *
+ * This happens when we optimistically load a pathname a word-at-a-time
+ * and the name is less than the full word and the  next page is not
+ * mapped. Typically that only happens for CONFIG_DEBUG_PAGEALLOC.
+ *
+ * NOTE! The faulting address is always a 'mov mem,reg' type instruction
+ * of size 'long', and the exception fixup must always point to right
+ * after the instruction.
+ */
+static bool ex_handler_zeropad(const struct exception_table_entry *e,
+			       struct pt_regs *regs,
+			       unsigned long fault_addr)
+{
+	struct insn insn;
+	const unsigned long mask = sizeof(long) - 1;
+	unsigned long offset, addr, next_ip, len;
+	unsigned long *reg;
+
+	next_ip = ex_fixup_addr(e);
+	len = next_ip - regs->ip;
+	if (len > MAX_INSN_SIZE)
+		return false;
+
+	if (insn_decode(&insn, (void *) regs->ip, len, INSN_MODE_KERN))
+		return false;
+	if (insn.length != len)
+		return false;
+
+	if (insn.opcode.bytes[0] != 0x8b)
+		return false;
+	if (insn.opnd_bytes != sizeof(long))
+		return false;
+
+	addr = (unsigned long) insn_get_addr_ref(&insn, regs);
+	if (addr == ~0ul)
+		return false;
+
+	offset = addr & mask;
+	addr = addr & ~mask;
+	if (fault_addr != addr + sizeof(long))
+		return false;
+
+	reg = insn_get_modrm_reg_ptr(&insn, regs);
+	if (!reg)
+		return false;
+
+	*reg = *(unsigned long *)addr >> (offset * 8);
+	return ex_handler_default(e, regs);
 }
 
 static bool ex_handler_fault(const struct exception_table_entry *fixup,
 			     struct pt_regs *regs, int trapnr)
 {
 	regs->ax = trapnr;
+	return ex_handler_default(fixup, regs);
+}
+
+static bool ex_handler_sgx(const struct exception_table_entry *fixup,
+			   struct pt_regs *regs, int trapnr)
+{
+	regs->ax = trapnr | SGX_ENCLS_FAULT_FLAG;
 	return ex_handler_default(fixup, regs);
 }
 
@@ -51,10 +130,36 @@ static bool ex_handler_fprestore(const struct exception_table_entry *fixup,
 	return true;
 }
 
-static bool ex_handler_uaccess(const struct exception_table_entry *fixup,
-			       struct pt_regs *regs, int trapnr)
+/*
+ * On x86-64, we end up being imprecise with 'access_ok()', and allow
+ * non-canonical user addresses to make the range comparisons simpler,
+ * and to not have to worry about LAM being enabled.
+ *
+ * In fact, we allow up to one page of "slop" at the sign boundary,
+ * which means that we can do access_ok() by just checking the sign
+ * of the pointer for the common case of having a small access size.
+ */
+static bool gp_fault_address_ok(unsigned long fault_address)
 {
-	WARN_ONCE(trapnr == X86_TRAP_GP, "General protection fault in user access. Non-canonical address?");
+#ifdef CONFIG_X86_64
+	/* Is it in the "user space" part of the non-canonical space? */
+	if (valid_user_address(fault_address))
+		return true;
+
+	/* .. or just above it? */
+	fault_address -= PAGE_SIZE;
+	if (valid_user_address(fault_address))
+		return true;
+#endif
+	return false;
+}
+
+static bool ex_handler_uaccess(const struct exception_table_entry *fixup,
+			       struct pt_regs *regs, int trapnr,
+			       unsigned long fault_address)
+{
+	WARN_ONCE(trapnr == X86_TRAP_GP && !gp_fault_address_ok(fault_address),
+		"General protection fault in user access. Non-canonical address?");
 	return ex_handler_default(fixup, regs);
 }
 
@@ -65,28 +170,31 @@ static bool ex_handler_copy(const struct exception_table_entry *fixup,
 	return ex_handler_fault(fixup, regs, trapnr);
 }
 
-static bool ex_handler_rdmsr_unsafe(const struct exception_table_entry *fixup,
-				    struct pt_regs *regs)
+static bool ex_handler_msr(const struct exception_table_entry *fixup,
+			   struct pt_regs *regs, bool wrmsr, bool safe, int reg)
 {
-	if (pr_warn_once("unchecked MSR access error: RDMSR from 0x%x at rIP: 0x%lx (%pS)\n",
-			 (unsigned int)regs->cx, regs->ip, (void *)regs->ip))
+	if (__ONCE_LITE_IF(!safe && wrmsr)) {
+		pr_warn("unchecked MSR access error: WRMSR to 0x%x (tried to write 0x%08x%08x) at rIP: 0x%lx (%pS)\n",
+			(unsigned int)regs->cx, (unsigned int)regs->dx,
+			(unsigned int)regs->ax,  regs->ip, (void *)regs->ip);
 		show_stack_regs(regs);
+	}
 
-	/* Pretend that the read succeeded and returned 0. */
-	regs->ax = 0;
-	regs->dx = 0;
-	return ex_handler_default(fixup, regs);
-}
-
-static bool ex_handler_wrmsr_unsafe(const struct exception_table_entry *fixup,
-				    struct pt_regs *regs)
-{
-	if (pr_warn_once("unchecked MSR access error: WRMSR to 0x%x (tried to write 0x%08x%08x) at rIP: 0x%lx (%pS)\n",
-			 (unsigned int)regs->cx, (unsigned int)regs->dx,
-			 (unsigned int)regs->ax,  regs->ip, (void *)regs->ip))
+	if (__ONCE_LITE_IF(!safe && !wrmsr)) {
+		pr_warn("unchecked MSR access error: RDMSR from 0x%x at rIP: 0x%lx (%pS)\n",
+			(unsigned int)regs->cx, regs->ip, (void *)regs->ip);
 		show_stack_regs(regs);
+	}
 
-	/* Pretend that the write succeeded. */
+	if (!wrmsr) {
+		/* Pretend that the read succeeded and returned 0. */
+		regs->ax = 0;
+		regs->dx = 0;
+	}
+
+	if (safe)
+		*pt_regs_nr(regs, reg) = -EIO;
+
 	return ex_handler_default(fixup, regs);
 }
 
@@ -99,17 +207,34 @@ static bool ex_handler_clear_fs(const struct exception_table_entry *fixup,
 	return ex_handler_default(fixup, regs);
 }
 
+static bool ex_handler_imm_reg(const struct exception_table_entry *fixup,
+			       struct pt_regs *regs, int reg, int imm)
+{
+	*pt_regs_nr(regs, reg) = (long)imm;
+	return ex_handler_default(fixup, regs);
+}
+
+static bool ex_handler_ucopy_len(const struct exception_table_entry *fixup,
+				  struct pt_regs *regs, int trapnr,
+				  unsigned long fault_address,
+				  int reg, int imm)
+{
+	regs->cx = imm * regs->cx + *pt_regs_nr(regs, reg);
+	return ex_handler_uaccess(fixup, regs, trapnr, fault_address);
+}
+
 int ex_get_fixup_type(unsigned long ip)
 {
 	const struct exception_table_entry *e = search_exception_tables(ip);
 
-	return e ? e->type : EX_TYPE_NONE;
+	return e ? FIELD_GET(EX_DATA_TYPE_MASK, e->data) : EX_TYPE_NONE;
 }
 
 int fixup_exception(struct pt_regs *regs, int trapnr, unsigned long error_code,
 		    unsigned long fault_addr)
 {
 	const struct exception_table_entry *e;
+	int type, reg, imm;
 
 #ifdef CONFIG_PNPBIOS
 	if (unlikely(SEGMENT_IS_PNP_CODE(regs->cs))) {
@@ -129,7 +254,11 @@ int fixup_exception(struct pt_regs *regs, int trapnr, unsigned long error_code,
 	if (!e)
 		return 0;
 
-	switch (e->type) {
+	type = FIELD_GET(EX_DATA_TYPE_MASK, e->data);
+	reg  = FIELD_GET(EX_DATA_REG_MASK,  e->data);
+	imm  = FIELD_GET(EX_DATA_IMM_MASK,  e->data);
+
+	switch (type) {
 	case EX_TYPE_DEFAULT:
 	case EX_TYPE_DEFAULT_MCE_SAFE:
 		return ex_handler_default(e, regs);
@@ -137,25 +266,40 @@ int fixup_exception(struct pt_regs *regs, int trapnr, unsigned long error_code,
 	case EX_TYPE_FAULT_MCE_SAFE:
 		return ex_handler_fault(e, regs, trapnr);
 	case EX_TYPE_UACCESS:
-		return ex_handler_uaccess(e, regs, trapnr);
+		return ex_handler_uaccess(e, regs, trapnr, fault_addr);
 	case EX_TYPE_COPY:
 		return ex_handler_copy(e, regs, trapnr);
 	case EX_TYPE_CLEAR_FS:
 		return ex_handler_clear_fs(e, regs);
 	case EX_TYPE_FPU_RESTORE:
 		return ex_handler_fprestore(e, regs);
-	case EX_TYPE_RDMSR:
-		return ex_handler_rdmsr_unsafe(e, regs);
-	case EX_TYPE_WRMSR:
-		return ex_handler_wrmsr_unsafe(e, regs);
 	case EX_TYPE_BPF:
 		return ex_handler_bpf(e, regs);
-	case EX_TYPE_RDMSR_IN_MCE:
-		ex_handler_msr_mce(regs, false);
-		break;
+	case EX_TYPE_WRMSR:
+		return ex_handler_msr(e, regs, true, false, reg);
+	case EX_TYPE_RDMSR:
+		return ex_handler_msr(e, regs, false, false, reg);
+	case EX_TYPE_WRMSR_SAFE:
+		return ex_handler_msr(e, regs, true, true, reg);
+	case EX_TYPE_RDMSR_SAFE:
+		return ex_handler_msr(e, regs, false, true, reg);
 	case EX_TYPE_WRMSR_IN_MCE:
 		ex_handler_msr_mce(regs, true);
 		break;
+	case EX_TYPE_RDMSR_IN_MCE:
+		ex_handler_msr_mce(regs, false);
+		break;
+	case EX_TYPE_POP_REG:
+		regs->sp += sizeof(long);
+		fallthrough;
+	case EX_TYPE_IMM_REG:
+		return ex_handler_imm_reg(e, regs, reg, imm);
+	case EX_TYPE_FAULT_SGX:
+		return ex_handler_sgx(e, regs, trapnr);
+	case EX_TYPE_UCOPY_LEN:
+		return ex_handler_ucopy_len(e, regs, trapnr, fault_addr, reg, imm);
+	case EX_TYPE_ZEROPAD:
+		return ex_handler_zeropad(e, regs, fault_addr);
 	}
 	BUG();
 }

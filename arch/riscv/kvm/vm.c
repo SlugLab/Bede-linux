@@ -31,30 +31,28 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 {
 	int r;
 
-	r = kvm_riscv_stage2_alloc_pgd(kvm);
+	r = kvm_riscv_gstage_alloc_pgd(kvm);
 	if (r)
 		return r;
 
-	r = kvm_riscv_stage2_vmid_init(kvm);
+	r = kvm_riscv_gstage_vmid_init(kvm);
 	if (r) {
-		kvm_riscv_stage2_free_pgd(kvm);
+		kvm_riscv_gstage_free_pgd(kvm);
 		return r;
 	}
 
-	return kvm_riscv_guest_timer_init(kvm);
+	kvm_riscv_aia_init_vm(kvm);
+
+	kvm_riscv_guest_timer_init(kvm);
+
+	return 0;
 }
 
 void kvm_arch_destroy_vm(struct kvm *kvm)
 {
-	int i;
+	kvm_destroy_vcpus(kvm);
 
-	for (i = 0; i < KVM_MAX_VCPUS; ++i) {
-		if (kvm->vcpus[i]) {
-			kvm_vcpu_destroy(kvm->vcpus[i]);
-			kvm->vcpus[i] = NULL;
-		}
-	}
-	atomic_set(&kvm->online_vcpus, 0);
+	kvm_riscv_aia_destroy_vm(kvm);
 }
 
 int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
@@ -74,13 +72,16 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		r = 1;
 		break;
 	case KVM_CAP_NR_VCPUS:
-		r = num_online_cpus();
+		r = min_t(unsigned int, num_online_cpus(), KVM_MAX_VCPUS);
 		break;
 	case KVM_CAP_MAX_VCPUS:
 		r = KVM_MAX_VCPUS;
 		break;
 	case KVM_CAP_NR_MEMSLOTS:
 		r = KVM_USER_MEM_SLOTS;
+		break;
+	case KVM_CAP_VM_GPA_BITS:
+		r = kvm_riscv_gstage_gpa_bits();
 		break;
 	default:
 		r = 0;
@@ -90,8 +91,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 	return r;
 }
 
-long kvm_arch_vm_ioctl(struct file *filp,
-		       unsigned int ioctl, unsigned long arg)
+int kvm_arch_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 {
 	return -EINVAL;
 }

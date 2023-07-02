@@ -29,7 +29,6 @@
 #include "hinic_hw_io.h"
 #include "hinic_hw_dev.h"
 
-#define IO_STATUS_TIMEOUT               100
 #define OUTBOUND_STATE_TIMEOUT          100
 #define DB_STATE_TIMEOUT                100
 
@@ -40,11 +39,6 @@
 
 enum intr_type {
 	INTR_MSIX_TYPE,
-};
-
-enum io_status {
-	IO_STOPPED = 0,
-	IO_RUNNING = 1,
 };
 
 /**
@@ -162,7 +156,6 @@ static int init_msix(struct hinic_hwdev *hwdev)
 	struct hinic_hwif *hwif = hwdev->hwif;
 	struct pci_dev *pdev = hwif->pdev;
 	int nr_irqs, num_aeqs, num_ceqs;
-	size_t msix_entries_size;
 	int i, err;
 
 	num_aeqs = HINIC_HWIF_NUM_AEQS(hwif);
@@ -171,8 +164,8 @@ static int init_msix(struct hinic_hwdev *hwdev)
 	if (nr_irqs > HINIC_HWIF_NUM_IRQS(hwif))
 		nr_irqs = HINIC_HWIF_NUM_IRQS(hwif);
 
-	msix_entries_size = nr_irqs * sizeof(*hwdev->msix_entries);
-	hwdev->msix_entries = devm_kzalloc(&pdev->dev, msix_entries_size,
+	hwdev->msix_entries = devm_kcalloc(&pdev->dev, nr_irqs,
+					   sizeof(*hwdev->msix_entries),
 					   GFP_KERNEL);
 	if (!hwdev->msix_entries)
 		return -ENOMEM;
@@ -838,8 +831,8 @@ static int hinic_l2nic_reset(struct hinic_hwdev *hwdev)
 	return 0;
 }
 
-int hinic_get_interrupt_cfg(struct hinic_hwdev *hwdev,
-			    struct hinic_msix_config *interrupt_info)
+static int hinic_get_interrupt_cfg(struct hinic_hwdev *hwdev,
+				   struct hinic_msix_config *interrupt_info)
 {
 	u16 out_size = sizeof(*interrupt_info);
 	struct hinic_pfhwdev *pfhwdev;
@@ -884,7 +877,7 @@ int hinic_set_interrupt_cfg(struct hinic_hwdev *hwdev,
 	if (err)
 		return -EINVAL;
 
-	interrupt_info->lli_credit_cnt = temp_info.lli_timer_cnt;
+	interrupt_info->lli_credit_cnt = temp_info.lli_credit_cnt;
 	interrupt_info->lli_timer_cnt = temp_info.lli_timer_cnt;
 
 	err = hinic_msg_to_mgmt(&pfhwdev->pf_to_mgmt, HINIC_MOD_COMM,
@@ -1040,13 +1033,6 @@ void hinic_free_hwdev(struct hinic_hwdev *hwdev)
 	disable_msix(hwdev);
 
 	hinic_free_hwif(hwdev->hwif);
-}
-
-int hinic_hwdev_max_num_qps(struct hinic_hwdev *hwdev)
-{
-	struct hinic_cap *nic_cap = &hwdev->nic_cap;
-
-	return nic_cap->max_qps;
 }
 
 /**

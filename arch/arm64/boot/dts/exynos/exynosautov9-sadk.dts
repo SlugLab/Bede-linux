@@ -39,9 +39,18 @@
 		regulator-boot-on;
 		enable-active-high;
 	};
+
+	ufs_1_fixed_vcc_reg: regulator-1 {
+		compatible = "regulator-fixed";
+		regulator-name = "ufs-vcc";
+		gpio = <&gpg2 2 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+		enable-active-high;
+	};
 };
 
 &serial_0 {
+	pinctrl-0 = <&uart0_bus_dual>;
 	status = "okay";
 };
 
@@ -49,8 +58,25 @@
 	status = "okay";
 };
 
+&ufs_1_phy {
+	status = "okay";
+};
+
 &ufs_0 {
 	status = "okay";
 	vcc-supply = <&ufs_0_fixed_vcc_reg>;
-	vcc-fixed-regulator;
+};
+
+&ufs_1 {
+	status = "okay";
+	vcc-supply = <&ufs_1_fixed_vcc_reg>;
+};
+
+&usi_0 {
+	samsung,clkreq-on; /* needed for UART mode */
+	status = "okay";
+};
+
+&xtcxo {
+	clock-frequency = <26000000>;
 };

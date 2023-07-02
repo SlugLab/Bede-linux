@@ -28,6 +28,7 @@
 #include <linux/ftrace.h>
 #include <linux/refcount.h>
 #include <linux/freelist.h>
+#include <linux/rethook.h>
 #include <asm/kprobes.h>
 
 #ifdef CONFIG_KPROBES
@@ -102,6 +103,7 @@ struct kprobe {
 				   * this flag is only for optimized_kprobe.
 				   */
 #define KPROBE_FLAG_FTRACE	8 /* probe is using ftrace */
+#define KPROBE_FLAG_ON_FUNC_ENTRY	16 /* probe is on the function entry */
 
 /* Has this kprobe gone ? */
 static inline bool kprobe_gone(struct kprobe *p)
@@ -149,11 +151,20 @@ struct kretprobe {
 	int maxactive;
 	int nmissed;
 	size_t data_size;
+#ifdef CONFIG_KRETPROBE_ON_RETHOOK
+	struct rethook *rh;
+#else
 	struct freelist_head freelist;
 	struct kretprobe_holder *rph;
+#endif
 };
 
+#define KRETPROBE_MAX_DATA_SIZE	4096
+
 struct kretprobe_instance {
+#ifdef CONFIG_KRETPROBE_ON_RETHOOK
+	struct rethook_node node;
+#else
 	union {
 		struct freelist_node freelist;
 		struct rcu_head rcu;
@@ -162,6 +173,7 @@ struct kretprobe_instance {
 	struct kretprobe_holder *rph;
 	kprobe_opcode_t *ret_addr;
 	void *fp;
+#endif
 	char data[];
 };
 
@@ -184,10 +196,24 @@ extern void kprobe_busy_begin(void);
 extern void kprobe_busy_end(void);
 
 #ifdef CONFIG_KRETPROBES
-extern void arch_prepare_kretprobe(struct kretprobe_instance *ri,
-				   struct pt_regs *regs);
+/* Check whether @p is used for implementing a trampoline. */
 extern int arch_trampoline_kprobe(struct kprobe *p);
 
+#ifdef CONFIG_KRETPROBE_ON_RETHOOK
+static nokprobe_inline struct kretprobe *get_kretprobe(struct kretprobe_instance *ri)
+{
+	RCU_LOCKDEP_WARN(!rcu_read_lock_any_held(),
+		"Kretprobe is accessed from instance under preemptive context");
+
+	return (struct kretprobe *)READ_ONCE(ri->node.rethook->data);
+}
+static nokprobe_inline unsigned long get_kretprobe_retaddr(struct kretprobe_instance *ri)
+{
+	return ri->node.ret_addr;
+}
+#else
+extern void arch_prepare_kretprobe(struct kretprobe_instance *ri,
+				   struct pt_regs *regs);
 void arch_kretprobe_fixup_return(struct pt_regs *regs,
 				 kprobe_opcode_t *correct_ret_addr);
 
@@ -230,6 +256,12 @@ static nokprobe_inline struct kretprobe *get_kretprobe(struct kretprobe_instance
 	return READ_ONCE(ri->rph->rp);
 }
 
+static nokprobe_inline unsigned long get_kretprobe_retaddr(struct kretprobe_instance *ri)
+{
+	return (unsigned long)ri->ret_addr;
+}
+#endif /* CONFIG_KRETPROBE_ON_RETHOOK */
+
 #else /* !CONFIG_KRETPROBES */
 static inline void arch_prepare_kretprobe(struct kretprobe *rp,
 					struct pt_regs *regs)
@@ -263,7 +295,6 @@ extern int arch_init_kprobes(void);
 extern void kprobes_inc_nmissed_count(struct kprobe *p);
 extern bool arch_within_kprobe_blacklist(unsigned long addr);
 extern int arch_populate_kprobe_blacklist(void);
-extern bool arch_kprobe_on_func_entry(unsigned long offset);
 extern int kprobe_on_func_entry(kprobe_opcode_t *addr, const char *sym, unsigned long offset);
 
 extern bool within_kprobe_blacklist(unsigned long addr);
@@ -346,13 +377,9 @@ extern void opt_pre_handler(struct kprobe *p, struct pt_regs *regs);
 
 DEFINE_INSN_CACHE_OPS(optinsn);
 
-#ifdef CONFIG_SYSCTL
-extern int sysctl_kprobes_optimization;
-extern int proc_kprobes_optimization_handler(struct ctl_table *table,
-					     int write, void *buffer,
-					     size_t *length, loff_t *ppos);
-#endif /* CONFIG_SYSCTL */
 extern void wait_for_kprobe_optimizer(void);
+bool optprobe_queued_unopt(struct optimized_kprobe *op);
+bool kprobe_disarmed(struct kprobe *p);
 #else /* !CONFIG_OPTPROBES */
 static inline void wait_for_kprobe_optimizer(void) { }
 #endif /* CONFIG_OPTPROBES */
@@ -388,6 +415,8 @@ static inline struct kprobe_ctlblk *get_kprobe_ctlblk(void)
 }
 
 kprobe_opcode_t *kprobe_lookup_name(const char *name, unsigned int offset);
+kprobe_opcode_t *arch_adjust_kprobe_addr(unsigned long addr, unsigned long offset, bool *on_func_entry);
+
 int register_kprobe(struct kprobe *p);
 void unregister_kprobe(struct kprobe *p);
 int register_kprobes(struct kprobe **kps, int num);
@@ -398,7 +427,11 @@ void unregister_kretprobe(struct kretprobe *rp);
 int register_kretprobes(struct kretprobe **rps, int num);
 void unregister_kretprobes(struct kretprobe **rps, int num);
 
+#if defined(CONFIG_KRETPROBE_ON_RETHOOK) || !defined(CONFIG_KRETPROBES)
+#define kprobe_flush_task(tk)	do {} while (0)
+#else
 void kprobe_flush_task(struct task_struct *tk);
+#endif
 
 void kprobe_free_init_mem(void);
 
@@ -431,6 +464,9 @@ static inline struct kprobe *kprobe_running(void)
 {
 	return NULL;
 }
+#define kprobe_busy_begin()	do {} while (0)
+#define kprobe_busy_end()	do {} while (0)
+
 static inline int register_kprobe(struct kprobe *p)
 {
 	return -EOPNOTSUPP;
@@ -509,6 +545,19 @@ static inline bool is_kprobe_optinsn_slot(unsigned long addr)
 #endif /* !CONFIG_OPTPROBES */
 
 #ifdef CONFIG_KRETPROBES
+#ifdef CONFIG_KRETPROBE_ON_RETHOOK
+static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
+{
+	return is_rethook_trampoline(addr);
+}
+
+static nokprobe_inline
+unsigned long kretprobe_find_ret_addr(struct task_struct *tsk, void *fp,
+				      struct llist_node **cur)
+{
+	return rethook_find_ret_addr(tsk, (unsigned long)fp, cur);
+}
+#else
 static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
 {
 	return (void *)addr == kretprobe_trampoline_addr();
@@ -516,6 +565,7 @@ static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
 
 unsigned long kretprobe_find_ret_addr(struct task_struct *tsk, void *fp,
 				      struct llist_node **cur);
+#endif
 #else
 static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
 {

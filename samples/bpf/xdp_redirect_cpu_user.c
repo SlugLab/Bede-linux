@@ -21,7 +21,6 @@ static const char *__doc__ =
 #include <string.h>
 #include <unistd.h>
 #include <locale.h>
-#include <sys/resource.h>
 #include <sys/sysinfo.h>
 #include <getopt.h>
 #include <net/if.h>
@@ -70,7 +69,7 @@ static void print_avail_progs(struct bpf_object *obj)
 
 	printf(" Programs to be used for -p/--progname:\n");
 	bpf_object__for_each_program(pos, obj) {
-		if (bpf_program__is_xdp(pos)) {
+		if (bpf_program__type(pos) == BPF_PROG_TYPE_XDP) {
 			if (!strncmp(bpf_program__name(pos), "xdp_prognum",
 				     sizeof("xdp_prognum") - 1))
 				printf(" %s\n", bpf_program__name(pos));
@@ -309,7 +308,6 @@ int main(int argc, char **argv)
 	const char *mprog_filename = NULL, *mprog_name = NULL;
 	struct xdp_redirect_cpu *skel;
 	struct bpf_map_info info = {};
-	char ifname_buf[IF_NAMESIZE];
 	struct bpf_cpumap_val value;
 	__u32 infosz = sizeof(info);
 	int ret = EXIT_FAIL_OPTION;
@@ -390,10 +388,10 @@ int main(int argc, char **argv)
 		case 'd':
 			if (strlen(optarg) >= IF_NAMESIZE) {
 				fprintf(stderr, "-d/--dev name too long\n");
+				usage(argv, long_options, __doc__, mask, true, skel->obj);
 				goto end_cpu;
 			}
-			safe_strncpy(ifname_buf, optarg, strlen(ifname_buf));
-			ifindex = if_nametoindex(ifname_buf);
+			ifindex = if_nametoindex(optarg);
 			if (!ifindex)
 				ifindex = strtoul(optarg, NULL, 0);
 			if (!ifindex) {
@@ -496,9 +494,9 @@ int main(int argc, char **argv)
 		goto end_cpu;
 	}
 
-	ret = bpf_obj_get_info_by_fd(bpf_map__fd(skel->maps.cpu_map), &info, &infosz);
+	ret = bpf_map_get_info_by_fd(bpf_map__fd(skel->maps.cpu_map), &info, &infosz);
 	if (ret < 0) {
-		fprintf(stderr, "Failed bpf_obj_get_info_by_fd for cpumap: %s\n",
+		fprintf(stderr, "Failed bpf_map_get_info_by_fd for cpumap: %s\n",
 			strerror(errno));
 		goto end_cpu;
 	}

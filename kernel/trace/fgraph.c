@@ -7,6 +7,7 @@
  *
  * Highly modified by Steven Rostedt (VMware).
  */
+#include <linux/jump_label.h>
 #include <linux/suspend.h>
 #include <linux/ftrace.h>
 #include <linux/slab.h>
@@ -23,23 +24,31 @@
 #define ASSIGN_OPS_HASH(opsname, val)
 #endif
 
-static bool kill_ftrace_graph;
+DEFINE_STATIC_KEY_FALSE(kill_ftrace_graph);
 int ftrace_graph_active;
 
 /* Both enabled by default (can be cleared by function_graph tracer flags */
 static bool fgraph_sleep_time = true;
 
-/**
- * ftrace_graph_is_dead - returns true if ftrace_graph_stop() was called
- *
- * ftrace_graph_stop() is called when a severe error is detected in
- * the function graph tracing. This function is called by the critical
- * paths of function graph to keep those paths from doing any more harm.
+#ifdef CONFIG_DYNAMIC_FTRACE
+/*
+ * archs can override this function if they must do something
+ * to enable hook for graph tracer.
  */
-bool ftrace_graph_is_dead(void)
+int __weak ftrace_enable_ftrace_graph_caller(void)
 {
-	return kill_ftrace_graph;
+	return 0;
 }
+
+/*
+ * archs can override this function if they must do something
+ * to disable hook for graph tracer.
+ */
+int __weak ftrace_disable_ftrace_graph_caller(void)
+{
+	return 0;
+}
+#endif
 
 /**
  * ftrace_graph_stop - set to permanently disable function graph tracing
@@ -51,7 +60,7 @@ bool ftrace_graph_is_dead(void)
  */
 void ftrace_graph_stop(void)
 {
-	kill_ftrace_graph = true;
+	static_branch_enable(&kill_ftrace_graph);
 }
 
 /* Add a function return address to the trace stack on thread info.*/
@@ -227,16 +236,23 @@ static struct notifier_block ftrace_suspend_notifier = {
 	.notifier_call = ftrace_suspend_notifier_call,
 };
 
+/* fgraph_ret_regs is not defined without CONFIG_FUNCTION_GRAPH_RETVAL */
+struct fgraph_ret_regs;
+
 /*
  * Send the trace to the ring-buffer.
  * @return the original return address.
  */
-unsigned long ftrace_return_to_handler(unsigned long frame_pointer)
+static unsigned long __ftrace_return_to_handler(struct fgraph_ret_regs *ret_regs,
+						unsigned long frame_pointer)
 {
 	struct ftrace_graph_ret trace;
 	unsigned long ret;
 
 	ftrace_pop_return_trace(&trace, &ret, frame_pointer);
+#ifdef CONFIG_FUNCTION_GRAPH_RETVAL
+	trace.retval = fgraph_ret_regs_return_value(ret_regs);
+#endif
 	trace.rettime = trace_clock_local();
 	ftrace_graph_return(&trace);
 	/*
@@ -256,6 +272,23 @@ unsigned long ftrace_return_to_handler(unsigned long frame_pointer)
 
 	return ret;
 }
+
+/*
+ * After all architecures have selected HAVE_FUNCTION_GRAPH_RETVAL, we can
+ * leave only ftrace_return_to_handler(ret_regs).
+ */
+#ifdef CONFIG_HAVE_FUNCTION_GRAPH_RETVAL
+unsigned long ftrace_return_to_handler(struct fgraph_ret_regs *ret_regs)
+{
+	return __ftrace_return_to_handler(ret_regs,
+				fgraph_ret_regs_frame_pointer(ret_regs));
+}
+#else
+unsigned long ftrace_return_to_handler(unsigned long frame_pointer)
+{
+	return __ftrace_return_to_handler(NULL, frame_pointer);
+}
+#endif
 
 /**
  * ftrace_graph_get_ret_stack - return the entry of the shadow stack
@@ -415,7 +448,9 @@ free:
 
 static void
 ftrace_graph_probe_sched_switch(void *ignore, bool preempt,
-			struct task_struct *prev, struct task_struct *next)
+				struct task_struct *prev,
+				struct task_struct *next,
+				unsigned int prev_state)
 {
 	unsigned long long timestamp;
 	int index;

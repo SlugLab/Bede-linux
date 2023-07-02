@@ -370,22 +370,33 @@ static int ili251x_firmware_update_resolution(struct device *dev)
 
 	/* The firmware update blob might have changed the resolution. */
 	error = priv->chip->read_reg(client, REG_PANEL_INFO, &rs, sizeof(rs));
-	if (error)
-		return error;
+	if (!error) {
+		resx = le16_to_cpup((__le16 *)rs);
+		resy = le16_to_cpup((__le16 *)(rs + 2));
 
-	resx = le16_to_cpup((__le16 *)rs);
-	resy = le16_to_cpup((__le16 *)(rs + 2));
+		/* The value reported by the firmware is invalid. */
+		if (!resx || resx == 0xffff || !resy || resy == 0xffff)
+			error = -EINVAL;
+	}
 
-	/* The value reported by the firmware is invalid. */
-	if (!resx || resx == 0xffff || !resy || resy == 0xffff)
-		return -EINVAL;
+	/*
+	 * In case of error, the firmware might be stuck in bootloader mode,
+	 * e.g. after a failed firmware update. Set maximum resolution, but
+	 * do not fail to probe, so the user can re-trigger the firmware
+	 * update and recover the touch controller.
+	 */
+	if (error) {
+		dev_warn(dev, "Invalid resolution reported by controller.\n");
+		resx = 16384;
+		resy = 16384;
+	}
 
 	input_abs_set_max(priv->input, ABS_X, resx - 1);
 	input_abs_set_max(priv->input, ABS_Y, resy - 1);
 	input_abs_set_max(priv->input, ABS_MT_POSITION_X, resx - 1);
 	input_abs_set_max(priv->input, ABS_MT_POSITION_Y, resy - 1);
 
-	return 0;
+	return error;
 }
 
 static ssize_t ili251x_firmware_update_firmware_version(struct device *dev)
@@ -756,15 +767,12 @@ static int ili251x_firmware_reset(struct i2c_client *client)
 	return ili251x_firmware_busy(client);
 }
 
-static void ili251x_hardware_reset(struct device *dev)
+static void ili210x_hardware_reset(struct gpio_desc *reset_gpio)
 {
-	struct i2c_client *client = to_i2c_client(dev);
-	struct ili210x *priv = i2c_get_clientdata(client);
-
 	/* Reset the controller */
-	gpiod_set_value_cansleep(priv->reset_gpio, 1);
-	usleep_range(10000, 15000);
-	gpiod_set_value_cansleep(priv->reset_gpio, 0);
+	gpiod_set_value_cansleep(reset_gpio, 1);
+	usleep_range(12000, 15000);
+	gpiod_set_value_cansleep(reset_gpio, 0);
 	msleep(300);
 }
 
@@ -773,6 +781,7 @@ static ssize_t ili210x_firmware_update_store(struct device *dev,
 					     const char *buf, size_t count)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct ili210x *priv = i2c_get_clientdata(client);
 	const char *fwname = ILI251X_FW_FILENAME;
 	const struct firmware *fw;
 	u16 ac_end, df_end;
@@ -803,7 +812,7 @@ static ssize_t ili210x_firmware_update_store(struct device *dev,
 
 	dev_dbg(dev, "Firmware update started, firmware=%s\n", fwname);
 
-	ili251x_hardware_reset(dev);
+	ili210x_hardware_reset(priv->reset_gpio);
 
 	error = ili251x_firmware_reset(client);
 	if (error)
@@ -858,7 +867,7 @@ static ssize_t ili210x_firmware_update_store(struct device *dev,
 	error = count;
 
 exit:
-	ili251x_hardware_reset(dev);
+	ili210x_hardware_reset(priv->reset_gpio);
 	dev_dbg(dev, "Firmware update ended, error=%i\n", error);
 	enable_irq(client->irq);
 	kfree(fwbuf);
@@ -915,9 +924,9 @@ static void ili210x_stop(void *data)
 	priv->stop = true;
 }
 
-static int ili210x_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int ili210x_i2c_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct device *dev = &client->dev;
 	const struct ili2xxx_chip *chip;
 	struct ili210x *priv;
@@ -951,9 +960,7 @@ static int ili210x_i2c_probe(struct i2c_client *client,
 		if (error)
 			return error;
 
-		usleep_range(50, 100);
-		gpiod_set_value_cansleep(reset_gpio, 0);
-		msleep(100);
+		ili210x_hardware_reset(reset_gpio);
 	}
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -981,11 +988,10 @@ static int ili210x_i2c_probe(struct i2c_client *client,
 	if (priv->chip->has_pressure_reg)
 		input_set_abs_params(input, ABS_MT_PRESSURE, 0, 0xa, 0, 0);
 	error = ili251x_firmware_update_cached_state(dev);
-	if (error) {
-		dev_err(dev, "Unable to cache firmware information, err: %d\n",
-			error);
-		return error;
-	}
+	if (error)
+		dev_warn(dev, "Unable to cache firmware information, err: %d\n",
+			 error);
+
 	touchscreen_parse_properties(input, true, &priv->prop);
 
 	error = input_mt_init_slots(input, priv->chip->max_touches,

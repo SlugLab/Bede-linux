@@ -149,8 +149,10 @@ struct sja1105_info {
 	bool (*rxtstamp)(struct dsa_switch *ds, int port, struct sk_buff *skb);
 	void (*txtstamp)(struct dsa_switch *ds, int port, struct sk_buff *skb);
 	int (*clocking_setup)(struct sja1105_private *priv);
-	int (*pcs_mdio_read)(struct mii_bus *bus, int phy, int reg);
-	int (*pcs_mdio_write)(struct mii_bus *bus, int phy, int reg, u16 val);
+	int (*pcs_mdio_read_c45)(struct mii_bus *bus, int phy, int mmd,
+				 int reg);
+	int (*pcs_mdio_write_c45)(struct mii_bus *bus, int phy, int mmd,
+				  int reg, u16 val);
 	int (*disable_microcontroller)(struct sja1105_private *priv);
 	const char *name;
 	bool supports_mii[SJA1105_MAX_NUM_PORTS];
@@ -249,6 +251,7 @@ struct sja1105_private {
 	bool fixed_link[SJA1105_MAX_NUM_PORTS];
 	unsigned long ucast_egress_floods;
 	unsigned long bcast_egress_floods;
+	unsigned long hwts_tx_en;
 	const struct sja1105_info *info;
 	size_t max_xfer_len;
 	struct spi_device *spidev;
@@ -256,11 +259,13 @@ struct sja1105_private {
 	u16 bridge_pvid[SJA1105_MAX_NUM_PORTS];
 	u16 tag_8021q_pvid[SJA1105_MAX_NUM_PORTS];
 	struct sja1105_flow_block flow_block;
-	struct sja1105_port ports[SJA1105_MAX_NUM_PORTS];
 	/* Serializes transmission of management frames so that
 	 * the switch doesn't confuse them with one another.
 	 */
 	struct mutex mgmt_lock;
+	/* PTP two-step TX timestamp ID, and its serialization lock */
+	spinlock_t ts_id_lock;
+	u8 ts_id;
 	/* Serializes access to the dynamic config interface */
 	struct mutex dynamic_config_lock;
 	struct devlink_region **regions;
@@ -269,7 +274,6 @@ struct sja1105_private {
 	struct mii_bus *mdio_base_tx;
 	struct mii_bus *mdio_pcs;
 	struct dw_xpcs *xpcs[SJA1105_MAX_NUM_PORTS];
-	struct sja1105_tagger_data tagger_data;
 	struct sja1105_ptp_data ptp_data;
 	struct sja1105_tas_data tas_data;
 };
@@ -301,10 +305,12 @@ void sja1105_frame_memory_partitioning(struct sja1105_private *priv);
 /* From sja1105_mdio.c */
 int sja1105_mdiobus_register(struct dsa_switch *ds);
 void sja1105_mdiobus_unregister(struct dsa_switch *ds);
-int sja1105_pcs_mdio_read(struct mii_bus *bus, int phy, int reg);
-int sja1105_pcs_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val);
-int sja1110_pcs_mdio_read(struct mii_bus *bus, int phy, int reg);
-int sja1110_pcs_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val);
+int sja1105_pcs_mdio_read_c45(struct mii_bus *bus, int phy, int mmd, int reg);
+int sja1105_pcs_mdio_write_c45(struct mii_bus *bus, int phy, int mmd, int reg,
+			       u16 val);
+int sja1110_pcs_mdio_read_c45(struct mii_bus *bus, int phy, int mmd, int reg);
+int sja1110_pcs_mdio_write_c45(struct mii_bus *bus, int phy, int mmd, int reg,
+			       u16 val);
 
 /* From sja1105_devlink.c */
 int sja1105_devlink_setup(struct dsa_switch *ds);

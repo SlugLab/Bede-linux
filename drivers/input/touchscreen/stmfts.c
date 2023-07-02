@@ -337,13 +337,15 @@ static int stmfts_input_open(struct input_dev *dev)
 	struct stmfts_data *sdata = input_get_drvdata(dev);
 	int err;
 
-	err = pm_runtime_get_sync(&sdata->client->dev);
-	if (err < 0)
+	err = pm_runtime_resume_and_get(&sdata->client->dev);
+	if (err)
 		return err;
 
 	err = i2c_smbus_write_byte(sdata->client, STMFTS_MS_MT_SENSE_ON);
-	if (err)
+	if (err) {
+		pm_runtime_put_sync(&sdata->client->dev);
 		return err;
+	}
 
 	mutex_lock(&sdata->mutex);
 	sdata->running = true;
@@ -622,8 +624,7 @@ static int stmfts_enable_led(struct stmfts_data *sdata)
 	return 0;
 }
 
-static int stmfts_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int stmfts_probe(struct i2c_client *client)
 {
 	int err;
 	struct stmfts_data *sdata;
@@ -736,14 +737,12 @@ static int stmfts_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int stmfts_remove(struct i2c_client *client)
+static void stmfts_remove(struct i2c_client *client)
 {
 	pm_runtime_disable(&client->dev);
-
-	return 0;
 }
 
-static int __maybe_unused stmfts_runtime_suspend(struct device *dev)
+static int stmfts_runtime_suspend(struct device *dev)
 {
 	struct stmfts_data *sdata = dev_get_drvdata(dev);
 	int ret;
@@ -755,7 +754,7 @@ static int __maybe_unused stmfts_runtime_suspend(struct device *dev)
 	return ret;
 }
 
-static int __maybe_unused stmfts_runtime_resume(struct device *dev)
+static int stmfts_runtime_resume(struct device *dev)
 {
 	struct stmfts_data *sdata = dev_get_drvdata(dev);
 	int ret;
@@ -767,7 +766,7 @@ static int __maybe_unused stmfts_runtime_resume(struct device *dev)
 	return ret;
 }
 
-static int __maybe_unused stmfts_suspend(struct device *dev)
+static int stmfts_suspend(struct device *dev)
 {
 	struct stmfts_data *sdata = dev_get_drvdata(dev);
 
@@ -776,7 +775,7 @@ static int __maybe_unused stmfts_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused stmfts_resume(struct device *dev)
+static int stmfts_resume(struct device *dev)
 {
 	struct stmfts_data *sdata = dev_get_drvdata(dev);
 
@@ -784,8 +783,8 @@ static int __maybe_unused stmfts_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops stmfts_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(stmfts_suspend, stmfts_resume)
-	SET_RUNTIME_PM_OPS(stmfts_runtime_suspend, stmfts_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(stmfts_suspend, stmfts_resume)
+	RUNTIME_PM_OPS(stmfts_runtime_suspend, stmfts_runtime_resume, NULL)
 };
 
 #ifdef CONFIG_OF
@@ -806,7 +805,7 @@ static struct i2c_driver stmfts_driver = {
 	.driver = {
 		.name = STMFTS_DEV_NAME,
 		.of_match_table = of_match_ptr(stmfts_of_match),
-		.pm = &stmfts_pm_ops,
+		.pm = pm_ptr(&stmfts_pm_ops),
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = stmfts_probe,

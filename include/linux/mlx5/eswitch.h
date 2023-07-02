@@ -12,7 +12,6 @@
 #define MLX5_ESWITCH_MANAGER(mdev) MLX5_CAP_GEN(mdev, eswitch_manager)
 
 enum {
-	MLX5_ESWITCH_NONE,
 	MLX5_ESWITCH_LEGACY,
 	MLX5_ESWITCH_OFFLOADS
 };
@@ -145,15 +144,15 @@ u32 mlx5_eswitch_get_vport_metadata_for_set(struct mlx5_eswitch *esw,
 	GENMASK(31 - ESW_TUN_ID_BITS - ESW_RESERVED_BITS, \
 		ESW_TUN_OPTS_OFFSET + 1)
 
-u8 mlx5_eswitch_mode(struct mlx5_core_dev *dev);
+u8 mlx5_eswitch_mode(const struct mlx5_core_dev *dev);
 u16 mlx5_eswitch_get_total_vports(const struct mlx5_core_dev *dev);
 struct mlx5_core_dev *mlx5_eswitch_get_core_dev(struct mlx5_eswitch *esw);
 
 #else  /* CONFIG_MLX5_ESWITCH */
 
-static inline u8 mlx5_eswitch_mode(struct mlx5_core_dev *dev)
+static inline u8 mlx5_eswitch_mode(const struct mlx5_core_dev *dev)
 {
-	return MLX5_ESWITCH_NONE;
+	return MLX5_ESWITCH_LEGACY;
 }
 
 static inline enum devlink_eswitch_encap_mode
@@ -197,6 +196,11 @@ static inline struct mlx5_core_dev *mlx5_eswitch_get_core_dev(struct mlx5_eswitc
 }
 
 #endif /* CONFIG_MLX5_ESWITCH */
+
+static inline bool is_mdev_legacy_mode(struct mlx5_core_dev *dev)
+{
+	return mlx5_eswitch_mode(dev) == MLX5_ESWITCH_LEGACY;
+}
 
 static inline bool is_mdev_switchdev_mode(struct mlx5_core_dev *dev)
 {

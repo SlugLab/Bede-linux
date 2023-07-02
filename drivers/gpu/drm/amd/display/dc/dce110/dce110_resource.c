@@ -23,8 +23,6 @@
  *
  */
 
-#include <linux/slab.h>
-
 #include "dm_services.h"
 
 #include "link_encoder.h"
@@ -403,8 +401,6 @@ static const struct resource_caps stoney_resource_cap = {
 
 static const struct dc_plane_cap plane_cap = {
 		.type = DC_PLANE_TYPE_DCE_RGB,
-		.blends_with_below = true,
-		.blends_with_above = true,
 		.per_pixel_alpha = 1,
 
 		.pixel_format_support = {
@@ -428,9 +424,12 @@ static const struct dc_plane_cap plane_cap = {
 		64
 };
 
+static const struct dc_debug_options debug_defaults = {
+		.enable_legacy_fast_update = true,
+};
+
 static const struct dc_plane_cap underlay_plane_cap = {
 		.type = DC_PLANE_TYPE_DCE_UNDERLAY,
-		.blends_with_above = true,
 		.per_pixel_alpha = 1,
 
 		.pixel_format_support = {
@@ -662,6 +661,7 @@ static const struct encoder_feature_support link_enc_feature = {
 };
 
 static struct link_encoder *dce110_link_encoder_create(
+	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
 	struct dce110_link_encoder *enc110 =
@@ -1372,6 +1372,7 @@ static bool dce110_resource_construct(
 	dc->caps.min_horizontal_blanking_period = 80;
 	dc->caps.is_apu = true;
 	dc->caps.extended_aux_timeout_support = false;
+	dc->debug = debug_defaults;
 
 	/*************************************************
 	 *  Create resources                             *

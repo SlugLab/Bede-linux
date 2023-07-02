@@ -64,7 +64,7 @@ int BPF_PROG(handle_fentry,
 
 __u32 fentry_manual_read_sz = 0;
 
-SEC("fentry/placeholder")
+SEC("fentry")
 int BPF_PROG(handle_fentry_manual,
 	     struct file *file, struct kobject *kobj,
 	     struct bin_attribute *bin_attr, char *buf, loff_t off, size_t len)
@@ -87,6 +87,18 @@ int BPF_PROG(handle_fexit,
 	return 0;
 }
 
+SEC("fexit/bpf_testmod_return_ptr")
+int BPF_PROG(handle_fexit_ret, int arg, struct file *ret)
+{
+	long buf = 0;
+
+	bpf_probe_read_kernel(&buf, 8, ret);
+	bpf_probe_read_kernel(&buf, 8, (char *)ret + 256);
+	*(volatile long long *)ret;
+	*(volatile int *)&ret->f_mode;
+	return 0;
+}
+
 __u32 fmod_ret_read_sz = 0;
 
 SEC("fmod_ret/bpf_testmod_test_read")
@@ -96,6 +108,12 @@ int BPF_PROG(handle_fmod_ret,
 {
 	fmod_ret_read_sz = len;
 	return 0; /* don't override the exit code */
+}
+
+SEC("kprobe.multi/bpf_testmod_test_read")
+int BPF_PROG(kprobe_multi)
+{
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";

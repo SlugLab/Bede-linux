@@ -49,6 +49,7 @@ enum mixart_message_id {
 	MSG_CLOCK_SET_PROPERTIES             = 0x200002,
 };
 
+#define MSG_DEFAULT_SIZE            512
 
 struct mixart_msg
 {
@@ -230,7 +231,7 @@ struct mixart_group_state_req
 	u64           scheduler;
 	u32           reserved4np[2];
 	u32           pipe_count;    /* set to 1 for instance */
-	struct mixart_uid  pipe_uid[1];   /* could be an array[pipe_count] */
+	struct mixart_uid  pipe_uid; /* could be an array[pipe_count], in theory */
 } __attribute__((packed));
 
 struct mixart_group_state_resp
@@ -251,10 +252,17 @@ struct mixart_sample_pos
 	u32   sample_pos_low_part;
 } __attribute__((packed));
 
+/*
+ * This structure is limited by the size of MSG_DEFAULT_SIZE. Instead of
+ * having MIXART_MAX_STREAM_PER_CARD * MIXART_MAX_CARDS many streams,
+ * this is capped to have a total size below MSG_DEFAULT_SIZE.
+ */
+#define MIXART_MAX_TIMER_NOTIFY_STREAMS				\
+	((MSG_DEFAULT_SIZE - sizeof(u32)) / sizeof(struct mixart_sample_pos))
 struct mixart_timer_notify
 {
 	u32                  stream_count;
-	struct mixart_sample_pos  streams[MIXART_MAX_STREAM_PER_CARD * MIXART_MAX_CARDS];
+	struct mixart_sample_pos  streams[MIXART_MAX_TIMER_NOTIFY_STREAMS];
 } __attribute__((packed));
 
 
@@ -306,7 +314,7 @@ struct mixart_clock_properties
 	u32 format;
 	u32 board_mask;
 	u32 nb_callers; /* set to 1 (see below) */
-	struct mixart_uid uid_caller[1];
+	struct mixart_uid uid_caller;
 } __attribute__((packed));
 
 struct mixart_clock_properties_resp
@@ -393,8 +401,7 @@ struct mixart_stream_param_desc
 	u32 reserved4np[3];
 	u32 pipe_count;                           /* set to 1 (array size !) */
 	u32 stream_count;                         /* set to 1 (array size !) */
-	struct mixart_txx_stream_desc stream_desc[1];  /* only one stream per command, but this could be an array */
-
+	struct mixart_txx_stream_desc stream_desc; /* only one stream per command, but this could be an array, in theory */
 } __attribute__((packed));
 
 

@@ -39,7 +39,7 @@ void serial_test_perf_link(void)
 	attr.type = PERF_TYPE_SOFTWARE;
 	attr.config = PERF_COUNT_SW_CPU_CLOCK;
 	attr.freq = 1;
-	attr.sample_freq = 4000;
+	attr.sample_freq = 1000;
 	pfd = syscall(__NR_perf_event_open, &attr, -1, 0, -1, PERF_FLAG_FD_CLOEXEC);
 	if (!ASSERT_GE(pfd, 0, "perf_fd"))
 		goto cleanup;
@@ -54,7 +54,7 @@ void serial_test_perf_link(void)
 		goto cleanup;
 
 	memset(&info, 0, sizeof(info));
-	err = bpf_obj_get_info_by_fd(link_fd, &info, &info_len);
+	err = bpf_link_get_info_by_fd(link_fd, &info, &info_len);
 	if (!ASSERT_OK(err, "link_get_info"))
 		goto cleanup;
 

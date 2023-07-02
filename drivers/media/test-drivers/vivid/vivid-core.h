@@ -22,8 +22,6 @@
 #define dprintk(dev, level, fmt, arg...) \
 	v4l2_dbg(level, vivid_debug, &dev->v4l2_dev, fmt, ## arg)
 
-/* The maximum number of clip rectangles */
-#define MAX_CLIPS  16
 /* The maximum number of inputs */
 #define MAX_INPUTS 16
 /* The maximum number of outputs */
@@ -35,7 +33,9 @@
 #define MAX_HEIGHT 2160
 /* The minimum image width/height */
 #define MIN_WIDTH  16
-#define MIN_HEIGHT 16
+#define MIN_HEIGHT MIN_WIDTH
+/* Pixel Array control divider */
+#define PIXEL_ARRAY_DIV MIN_WIDTH
 /* The data_offset of plane 0 for the multiplanar formats */
 #define PLANE0_DATA_OFFSET 128
 
@@ -227,6 +227,7 @@ struct vivid_dev {
 	struct v4l2_ctrl		*bitmask;
 	struct v4l2_ctrl		*int_menu;
 	struct v4l2_ctrl		*ro_int32;
+	struct v4l2_ctrl		*pixel_array;
 	struct v4l2_ctrl		*test_pattern;
 	struct v4l2_ctrl		*colorspace;
 	struct v4l2_ctrl		*rgb_range_cap;
@@ -307,7 +308,7 @@ struct vivid_dev {
 	bool				dqbuf_error;
 	bool				req_validate_error;
 	bool				seq_wrap;
-	bool				time_wrap;
+	u64				time_wrap;
 	u64				time_wrap_offset;
 	unsigned			perc_dropped_buffers;
 	enum vivid_signal_mode		std_signal_mode[MAX_INPUTS];
@@ -342,17 +343,6 @@ struct vivid_dev {
 
 	u32				power_present;
 
-	/* Capture Overlay */
-	struct v4l2_framebuffer		fb_cap;
-	struct v4l2_fh			*overlay_cap_owner;
-	void				*fb_vbase_cap;
-	int				overlay_cap_top, overlay_cap_left;
-	enum v4l2_field			overlay_cap_field;
-	void				*bitmap_cap;
-	struct v4l2_clip		clips_cap[MAX_CLIPS];
-	struct v4l2_clip		try_clips_cap[MAX_CLIPS];
-	unsigned			clipcount_cap;
-
 	/* Output */
 	unsigned			output;
 	v4l2_std_id			std_out;
@@ -380,10 +370,6 @@ struct vivid_dev {
 	void				*fb_vbase_out;
 	bool				overlay_out_enabled;
 	int				overlay_out_top, overlay_out_left;
-	void				*bitmap_out;
-	struct v4l2_clip		clips_out[MAX_CLIPS];
-	struct v4l2_clip		try_clips_out[MAX_CLIPS];
-	unsigned			clipcount_out;
 	unsigned			fbuf_out_flags;
 	u32				chromakey_out;
 	u8				global_alpha_out;
@@ -437,6 +423,7 @@ struct vivid_dev {
 	bool				touch_cap_seq_resync;
 	u32				touch_cap_seq_start;
 	u32				touch_cap_seq_count;
+	u32				touch_cap_with_seq_wrap_count;
 	bool				touch_cap_streaming;
 	struct v4l2_fract		timeperframe_tch_cap;
 	struct v4l2_pix_format		tch_format;
@@ -524,7 +511,9 @@ struct vivid_dev {
 	struct task_struct		*kthread_sdr_cap;
 	unsigned long			jiffies_sdr_cap;
 	u32				sdr_cap_seq_offset;
+	u32				sdr_cap_seq_start;
 	u32				sdr_cap_seq_count;
+	u32				sdr_cap_with_seq_wrap_count;
 	bool				sdr_cap_seq_resync;
 
 	/* RDS generator */

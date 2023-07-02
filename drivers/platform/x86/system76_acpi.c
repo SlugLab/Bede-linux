@@ -35,6 +35,7 @@ struct system76_data {
 	union acpi_object *nfan;
 	union acpi_object *ntmp;
 	struct input_dev *input;
+	bool has_open_ec;
 };
 
 static const struct acpi_device_id device_ids[] = {
@@ -253,7 +254,7 @@ static struct attribute *system76_battery_attrs[] = {
 
 ATTRIBUTE_GROUPS(system76_battery);
 
-static int system76_battery_add(struct power_supply *battery)
+static int system76_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
 {
 	// System76 EC only supports 1 battery
 	if (strcmp(battery->desc->name, "BAT0") != 0)
@@ -265,7 +266,7 @@ static int system76_battery_add(struct power_supply *battery)
 	return 0;
 }
 
-static int system76_battery_remove(struct power_supply *battery)
+static int system76_battery_remove(struct power_supply *battery, struct acpi_battery_hook *hook)
 {
 	device_remove_groups(&battery->dev, system76_battery_groups);
 	return 0;
@@ -279,20 +280,12 @@ static struct acpi_battery_hook system76_battery_hook = {
 
 static void system76_battery_init(void)
 {
-	acpi_handle handle;
-
-	handle = ec_get_handle();
-	if (handle && acpi_has_method(handle, "GBCT"))
-		battery_hook_register(&system76_battery_hook);
+	battery_hook_register(&system76_battery_hook);
 }
 
 static void system76_battery_exit(void)
 {
-	acpi_handle handle;
-
-	handle = ec_get_handle();
-	if (handle && acpi_has_method(handle, "GBCT"))
-		battery_hook_unregister(&system76_battery_hook);
+	battery_hook_unregister(&system76_battery_hook);
 }
 
 // Get the airplane mode LED brightness
@@ -346,7 +339,7 @@ static ssize_t kb_led_color_show(
 	struct led_classdev *led;
 	struct system76_data *data;
 
-	led = (struct led_classdev *)dev->driver_data;
+	led = dev_get_drvdata(dev);
 	data = container_of(led, struct system76_data, kb_led);
 	return sysfs_emit(buf, "%06X\n", data->kb_color);
 }
@@ -363,7 +356,7 @@ static ssize_t kb_led_color_store(
 	unsigned int val;
 	int ret;
 
-	led = (struct led_classdev *)dev->driver_data;
+	led = dev_get_drvdata(dev);
 	data = container_of(led, struct system76_data, kb_led);
 	ret = kstrtouint(buf, 16, &val);
 	if (ret)
@@ -588,7 +581,7 @@ static const struct hwmon_ops thermal_ops = {
 };
 
 // Allocate up to 8 fans and temperatures
-static const struct hwmon_channel_info *thermal_channel_info[] = {
+static const struct hwmon_channel_info * const thermal_channel_info[] = {
 	HWMON_CHANNEL_INFO(fan,
 		HWMON_F_INPUT | HWMON_F_LABEL,
 		HWMON_F_INPUT | HWMON_F_LABEL,
@@ -673,6 +666,10 @@ static int system76_add(struct acpi_device *acpi_dev)
 	acpi_dev->driver_data = data;
 	data->acpi_dev = acpi_dev;
 
+	// Some models do not run open EC firmware. Check for an ACPI method
+	// that only exists on open EC to guard functionality specific to it.
+	data->has_open_ec = acpi_has_method(acpi_device_handle(data->acpi_dev), "NFAN");
+
 	err = system76_get(data, "INIT");
 	if (err)
 		return err;
@@ -718,48 +715,51 @@ static int system76_add(struct acpi_device *acpi_dev)
 	if (err)
 		goto error;
 
-	err = system76_get_object(data, "NFAN", &data->nfan);
-	if (err)
-		goto error;
+	if (data->has_open_ec) {
+		err = system76_get_object(data, "NFAN", &data->nfan);
+		if (err)
+			goto error;
 
-	err = system76_get_object(data, "NTMP", &data->ntmp);
-	if (err)
-		goto error;
+		err = system76_get_object(data, "NTMP", &data->ntmp);
+		if (err)
+			goto error;
 
-	data->therm = devm_hwmon_device_register_with_info(&acpi_dev->dev,
-		"system76_acpi", data, &thermal_chip_info, NULL);
-	err = PTR_ERR_OR_ZERO(data->therm);
-	if (err)
-		goto error;
+		data->therm = devm_hwmon_device_register_with_info(&acpi_dev->dev,
+			"system76_acpi", data, &thermal_chip_info, NULL);
+		err = PTR_ERR_OR_ZERO(data->therm);
+		if (err)
+			goto error;
 
-	system76_battery_init();
+		system76_battery_init();
+	}
 
 	return 0;
 
 error:
-	kfree(data->ntmp);
-	kfree(data->nfan);
+	if (data->has_open_ec) {
+		kfree(data->ntmp);
+		kfree(data->nfan);
+	}
 	return err;
 }
 
 // Remove a System76 ACPI device
-static int system76_remove(struct acpi_device *acpi_dev)
+static void system76_remove(struct acpi_device *acpi_dev)
 {
 	struct system76_data *data;
 
 	data = acpi_driver_data(acpi_dev);
 
-	system76_battery_exit();
+	if (data->has_open_ec) {
+		system76_battery_exit();
+		kfree(data->nfan);
+		kfree(data->ntmp);
+	}
 
 	devm_led_classdev_unregister(&acpi_dev->dev, &data->ap_led);
 	devm_led_classdev_unregister(&acpi_dev->dev, &data->kb_led);
 
-	kfree(data->nfan);
-	kfree(data->ntmp);
-
 	system76_get(data, "FINI");
-
-	return 0;
 }
 
 static struct acpi_driver system76_driver = {

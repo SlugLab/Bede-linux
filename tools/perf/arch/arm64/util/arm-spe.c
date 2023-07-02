@@ -36,29 +36,6 @@ struct arm_spe_recording {
 	bool			*wrapped;
 };
 
-static void arm_spe_set_timestamp(struct auxtrace_record *itr,
-				  struct evsel *evsel)
-{
-	struct arm_spe_recording *ptr;
-	struct perf_pmu *arm_spe_pmu;
-	struct evsel_config_term *term = evsel__get_config_term(evsel, CFG_CHG);
-	u64 user_bits = 0, bit;
-
-	ptr = container_of(itr, struct arm_spe_recording, itr);
-	arm_spe_pmu = ptr->arm_spe_pmu;
-
-	if (term)
-		user_bits = term->val.cfg_chg;
-
-	bit = perf_pmu__format_bits(&arm_spe_pmu->format, "ts_enable");
-
-	/* Skip if user has set it */
-	if (bit & user_bits)
-		return;
-
-	evsel->core.attr.config |= bit;
-}
-
 static size_t
 arm_spe_info_priv_size(struct auxtrace_record *itr __maybe_unused,
 		       struct evlist *evlist __maybe_unused)
@@ -144,10 +121,11 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 			container_of(itr, struct arm_spe_recording, itr);
 	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu;
 	struct evsel *evsel, *arm_spe_evsel = NULL;
-	struct perf_cpu_map *cpus = evlist->core.cpus;
+	struct perf_cpu_map *cpus = evlist->core.user_requested_cpus;
 	bool privileged = perf_event_paranoid_check(-1);
 	struct evsel *tracking_evsel;
 	int err;
+	u64 bit;
 
 	sper->evlist = evlist;
 
@@ -158,7 +136,8 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 				return -EINVAL;
 			}
 			evsel->core.attr.freq = 0;
-			evsel->core.attr.sample_period = 1;
+			evsel->core.attr.sample_period = arm_spe_pmu->default_config->sample_period;
+			evsel->needs_auxtrace_mmap = true;
 			arm_spe_evsel = evsel;
 			opts->full_auxtrace = true;
 		}
@@ -236,11 +215,27 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 	 */
 	if (!perf_cpu_map__empty(cpus)) {
 		evsel__set_sample_bit(arm_spe_evsel, CPU);
-		arm_spe_set_timestamp(itr, arm_spe_evsel);
+		evsel__set_config_if_unset(arm_spe_pmu, arm_spe_evsel,
+					   "ts_enable", 1);
 	}
 
+	/*
+	 * Set this only so that perf report knows that SPE generates memory info. It has no effect
+	 * on the opening of the event or the SPE data produced.
+	 */
+	evsel__set_sample_bit(arm_spe_evsel, DATA_SRC);
+
+	/*
+	 * The PHYS_ADDR flag does not affect the driver behaviour, it is used to
+	 * inform that the resulting output's SPE samples contain physical addresses
+	 * where applicable.
+	 */
+	bit = perf_pmu__format_bits(&arm_spe_pmu->format, "pa_enable");
+	if (arm_spe_evsel->core.attr.config & bit)
+		evsel__set_sample_bit(arm_spe_evsel, PHYS_ADDR);
+
 	/* Add dummy event to keep tracking */
-	err = parse_events(evlist, "dummy:u", NULL);
+	err = parse_event(evlist, "dummy:u");
 	if (err)
 		return err;
 
@@ -462,7 +457,7 @@ static void arm_spe_recording_free(struct auxtrace_record *itr)
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
 
-	free(sper->wrapped);
+	zfree(&sper->wrapped);
 	free(sper);
 }
 

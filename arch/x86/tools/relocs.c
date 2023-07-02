@@ -56,6 +56,7 @@ static const char * const sym_regex_kernel[S_NSYMTYPES] = {
 	"^(xen_irq_disable_direct_reloc$|"
 	"xen_save_fl_direct_reloc$|"
 	"VDSO|"
+	"__kcfi_typeid_|"
 	"__crc_)",
 
 /*
@@ -68,7 +69,7 @@ static const char * const sym_regex_kernel[S_NSYMTYPES] = {
 	"(__parainstructions|__alt_instructions)(_end)?|"
 	"(__iommu_table|__apicdrivers|__smp_locks)(_end)?|"
 	"__(start|end)_pci_.*|"
-#if CONFIG_FW_LOADER_BUILTIN
+#if CONFIG_FW_LOADER
 	"__(start|end)_builtin_fw|"
 #endif
 	"__(start|stop)___ksymtab(_gpl)?|"
@@ -405,7 +406,7 @@ static void read_ehdr(FILE *fp)
 	if (ehdr.e_version != EV_CURRENT)
 		die("Unknown ELF version\n");
 	if (ehdr.e_ehsize != sizeof(Elf_Ehdr))
-		die("Bad Elf header size\n");
+		die("Bad ELF header size\n");
 	if (ehdr.e_phentsize != sizeof(Elf_Phdr))
 		die("Bad program header entry\n");
 	if (ehdr.e_shentsize != sizeof(Elf_Shdr))

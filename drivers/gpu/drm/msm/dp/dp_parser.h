@@ -10,12 +10,12 @@
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-dp.h>
 
-#include "dpu_io_util.h"
 #include "msm_drv.h"
 
 #define DP_LABEL "MDSS DP DISPLAY"
 #define DP_MAX_PIXEL_CLK_KHZ	675000
 #define DP_MAX_NUM_DP_LANES	4
+#define DP_LINK_RATE_HBR2	540000 /* kbytes */
 
 enum dp_pm_type {
 	DP_CORE_PM,
@@ -92,8 +92,6 @@ struct dp_pinctrl {
 	struct pinctrl_state *state_suspend;
 };
 
-#define DP_DEV_REGULATOR_MAX	4
-
 /* Regulators for DP devices */
 struct dp_reg_entry {
 	char name[32];
@@ -101,9 +99,9 @@ struct dp_reg_entry {
 	int disable_load;
 };
 
-struct dp_regulator_cfg {
-	int num;
-	struct dp_reg_entry regs[DP_DEV_REGULATOR_MAX];
+struct dss_module_power {
+	unsigned int num_clk;
+	struct clk_bulk_data *clocks;
 };
 
 /**
@@ -121,11 +119,11 @@ struct dp_parser {
 	struct dp_pinctrl pinctrl;
 	struct dp_io io;
 	struct dp_display_data disp_data;
-	const struct dp_regulator_cfg *regulator_cfg;
 	u32 max_dp_lanes;
-	struct drm_bridge *panel_bridge;
+	u32 max_dp_link_rate;
+	struct drm_bridge *next_bridge;
 
-	int (*parse)(struct dp_parser *parser, int connector_type);
+	int (*parse)(struct dp_parser *parser);
 };
 
 /**
@@ -140,5 +138,18 @@ struct dp_parser {
  * can be parsed using this module.
  */
 struct dp_parser *dp_parser_get(struct platform_device *pdev);
+
+/**
+ * devm_dp_parser_find_next_bridge() - find an additional bridge to DP
+ *
+ * @dev: device to tie bridge lifetime to
+ * @parser: dp_parser data from client
+ *
+ * This function is used to find any additional bridge attached to
+ * the DP controller. The eDP interface requires a panel bridge.
+ *
+ * Return: 0 if able to get the bridge, otherwise negative errno for failure.
+ */
+int devm_dp_parser_find_next_bridge(struct device *dev, struct dp_parser *parser);
 
 #endif

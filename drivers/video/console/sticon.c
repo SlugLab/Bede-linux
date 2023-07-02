@@ -46,10 +46,11 @@
 #include <linux/slab.h>
 #include <linux/font.h>
 #include <linux/crc32.h>
+#include <linux/fb.h>
 
 #include <asm/io.h>
 
-#include "../fbdev/sticore.h"
+#include <video/sticore.h>
 
 /* switching to graphics mode */
 #define BLANK 0
@@ -168,7 +169,8 @@ static int sticon_set_def_font(int unit, struct console_font *op)
 	return 0;
 }
 
-static int sticon_set_font(struct vc_data *vc, struct console_font *op)
+static int sticon_set_font(struct vc_data *vc, struct console_font *op,
+			   unsigned int vpitch)
 {
 	struct sti_struct *sti = sticon_sti;
 	int vc_cols, vc_rows, vc_old_cols, vc_old_rows;
@@ -180,7 +182,7 @@ static int sticon_set_font(struct vc_data *vc, struct console_font *op)
 	struct sti_cooked_font *cooked_font;
 	unsigned char *data = op->data, *p;
 
-	if ((w < 6) || (h < 6) || (w > 32) || (h > 32)
+	if ((w < 6) || (h < 6) || (w > 32) || (h > 32) || (vpitch != 32)
 	    || (op->charcount != 256 && op->charcount != 512))
 		return -EINVAL;
 	pitch = ALIGN(w, 8) / 8;
@@ -266,9 +268,9 @@ static int sticon_font_default(struct vc_data *vc, struct console_font *op, char
 }
 
 static int sticon_font_set(struct vc_data *vc, struct console_font *font,
-			   unsigned int flags)
+			   unsigned int vpitch, unsigned int flags)
 {
-	return sticon_set_font(vc, font);
+	return sticon_set_font(vc, font, vpitch);
 }
 
 static void sticon_init(struct vc_data *c, int init)
@@ -280,7 +282,7 @@ static void sticon_init(struct vc_data *c, int init)
     vc_cols = sti_onscreen_x(sti) / sti->font->width;
     vc_rows = sti_onscreen_y(sti) / sti->font->height;
     c->vc_can_do_color = 1;
-    
+
     if (init) {
 	c->vc_cols = vc_cols;
 	c->vc_rows = vc_rows;
@@ -332,13 +334,13 @@ static u8 sticon_build_attr(struct vc_data *conp, u8 color,
 			    bool blink, bool underline, bool reverse,
 			    bool italic)
 {
-    u8 attr = ((color & 0x70) >> 1) | ((color & 7));
+	u8 fg = color & 7;
+	u8 bg = (color & 0x70) >> 4;
 
-    if (reverse) {
-	color = ((color >> 3) & 0x7) | ((color & 0x7) << 3);
-    }
-
-    return attr;
+	if (reverse)
+		return (fg << 3) | bg;
+	else
+		return (bg << 3) | fg;
 }
 
 static void sticon_invert_region(struct vc_data *conp, u16 *p, int count)
@@ -372,7 +374,7 @@ static const struct consw sti_con = {
 	.con_font_set		= sticon_font_set,
 	.con_font_default	= sticon_font_default,
 	.con_build_attr		= sticon_build_attr,
-	.con_invert_region	= sticon_invert_region, 
+	.con_invert_region	= sticon_invert_region,
 };
 
 
@@ -392,7 +394,9 @@ static int __init sticonsole_init(void)
     for (i = 0; i < MAX_NR_CONSOLES; i++)
 	font_data[i] = STI_DEF_FONT;
 
-    pr_info("sticon: Initializing STI text console.\n");
+    pr_info("sticon: Initializing STI text console on %s at [%s]\n",
+	sticon_sti->sti_data->inq_outptr.dev_name,
+	sticon_sti->pa_path);
     console_lock();
     err = do_take_over_console(&sti_con, 0, MAX_NR_CONSOLES - 1,
 		PAGE0->mem_cons.cl_class != CL_DUPLEX);

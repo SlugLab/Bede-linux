@@ -519,19 +519,11 @@ static netdev_tx_t qeth_l2_hard_start_xmit(struct sk_buff *skb,
 	return NETDEV_TX_OK;
 }
 
-static u16 qeth_l2_select_queue(struct net_device *dev, struct sk_buff *skb,
-				struct net_device *sb_dev)
+static u16 qeth_l2_iqd_select_queue(struct net_device *dev, struct sk_buff *skb,
+				    struct net_device *sb_dev)
 {
-	struct qeth_card *card = dev->ml_priv;
-
-	if (IS_IQD(card))
-		return qeth_iqd_select_queue(dev, skb,
-					     qeth_get_ether_cast_type(skb),
-					     sb_dev);
-	if (qeth_uses_tx_prio_queueing(card))
-		return qeth_get_priority_queue(card, skb);
-
-	return netdev_pick_tx(dev, skb, sb_dev);
+	return qeth_iqd_select_queue(dev, skb, qeth_get_ether_cast_type(skb),
+				     sb_dev);
 }
 
 static void qeth_l2_set_rx_mode(struct net_device *dev)
@@ -726,7 +718,8 @@ struct qeth_l2_br2dev_event_work {
 	unsigned char addr[ETH_ALEN];
 };
 
-static const struct net_device_ops qeth_l2_netdev_ops;
+static const struct net_device_ops qeth_l2_iqd_netdev_ops;
+static const struct net_device_ops qeth_l2_osa_netdev_ops;
 
 static bool qeth_l2_must_learn(struct net_device *netdev,
 			       struct net_device *dstdev)
@@ -738,7 +731,8 @@ static bool qeth_l2_must_learn(struct net_device *netdev,
 		(priv->brport_features & BR_LEARNING_SYNC) &&
 		!(br_port_flag_is_set(netdev, BR_ISOLATED) &&
 		  br_port_flag_is_set(dstdev, BR_ISOLATED)) &&
-		netdev->netdev_ops == &qeth_l2_netdev_ops);
+		(netdev->netdev_ops == &qeth_l2_iqd_netdev_ops ||
+		 netdev->netdev_ops == &qeth_l2_osa_netdev_ops));
 }
 
 /**
@@ -764,7 +758,6 @@ static void qeth_l2_br2dev_worker(struct work_struct *work)
 	struct list_head *iter;
 	int err = 0;
 
-	kfree(br2dev_event_work);
 	QETH_CARD_TEXT_(card, 4, "b2dw%04lx", event);
 	QETH_CARD_TEXT_(card, 4, "ma%012llx", ether_addr_to_u64(addr));
 
@@ -821,6 +814,7 @@ unlock:
 	dev_put(brdev);
 	dev_put(lsyncdev);
 	dev_put(dstdev);
+	kfree(br2dev_event_work);
 }
 
 static int qeth_l2_br2dev_queue_work(struct net_device *brdev,
@@ -1051,13 +1045,34 @@ static int qeth_l2_bridge_setlink(struct net_device *dev, struct nlmsghdr *nlh,
 	return rc;
 }
 
-static const struct net_device_ops qeth_l2_netdev_ops = {
+static const struct net_device_ops qeth_l2_iqd_netdev_ops = {
 	.ndo_open		= qeth_open,
 	.ndo_stop		= qeth_stop,
 	.ndo_get_stats64	= qeth_get_stats64,
 	.ndo_start_xmit		= qeth_l2_hard_start_xmit,
 	.ndo_features_check	= qeth_features_check,
-	.ndo_select_queue	= qeth_l2_select_queue,
+	.ndo_select_queue	= qeth_l2_iqd_select_queue,
+	.ndo_validate_addr	= qeth_l2_validate_addr,
+	.ndo_set_rx_mode	= qeth_l2_set_rx_mode,
+	.ndo_eth_ioctl		= qeth_do_ioctl,
+	.ndo_siocdevprivate	= qeth_siocdevprivate,
+	.ndo_set_mac_address	= qeth_l2_set_mac_address,
+	.ndo_vlan_rx_add_vid	= qeth_l2_vlan_rx_add_vid,
+	.ndo_vlan_rx_kill_vid	= qeth_l2_vlan_rx_kill_vid,
+	.ndo_tx_timeout		= qeth_tx_timeout,
+	.ndo_fix_features	= qeth_fix_features,
+	.ndo_set_features	= qeth_set_features,
+	.ndo_bridge_getlink	= qeth_l2_bridge_getlink,
+	.ndo_bridge_setlink	= qeth_l2_bridge_setlink,
+};
+
+static const struct net_device_ops qeth_l2_osa_netdev_ops = {
+	.ndo_open		= qeth_open,
+	.ndo_stop		= qeth_stop,
+	.ndo_get_stats64	= qeth_get_stats64,
+	.ndo_start_xmit		= qeth_l2_hard_start_xmit,
+	.ndo_features_check	= qeth_features_check,
+	.ndo_select_queue	= qeth_osa_select_queue,
 	.ndo_validate_addr	= qeth_l2_validate_addr,
 	.ndo_set_rx_mode	= qeth_l2_set_rx_mode,
 	.ndo_eth_ioctl		= qeth_do_ioctl,
@@ -1068,14 +1083,13 @@ static const struct net_device_ops qeth_l2_netdev_ops = {
 	.ndo_tx_timeout		= qeth_tx_timeout,
 	.ndo_fix_features	= qeth_fix_features,
 	.ndo_set_features	= qeth_set_features,
-	.ndo_bridge_getlink	= qeth_l2_bridge_getlink,
-	.ndo_bridge_setlink	= qeth_l2_bridge_setlink,
 };
 
 static int qeth_l2_setup_netdev(struct qeth_card *card)
 {
+	card->dev->netdev_ops = IS_IQD(card) ? &qeth_l2_iqd_netdev_ops :
+					       &qeth_l2_osa_netdev_ops;
 	card->dev->needed_headroom = sizeof(struct qeth_hdr);
-	card->dev->netdev_ops = &qeth_l2_netdev_ops;
 	card->dev->priv_flags |= IFF_UNICAST_FLT;
 
 	if (IS_OSM(card)) {
@@ -1115,11 +1129,11 @@ static int qeth_l2_setup_netdev(struct qeth_card *card)
 	if (card->dev->hw_features & (NETIF_F_TSO | NETIF_F_TSO6)) {
 		card->dev->needed_headroom = sizeof(struct qeth_hdr_tso);
 		netif_keep_dst(card->dev);
-		netif_set_gso_max_size(card->dev,
+		netif_set_tso_max_size(card->dev,
 				       PAGE_SIZE * (QDIO_MAX_ELEMENTS_PER_BUFFER - 1));
 	}
 
-	netif_napi_add(card->dev, &card->napi, qeth_poll, QETH_NAPI_WEIGHT);
+	netif_napi_add(card->dev, &card->napi, qeth_poll);
 	return register_netdev(card->dev);
 }
 
@@ -1241,37 +1255,38 @@ static void qeth_bridge_emit_host_event(struct qeth_card *card,
 
 	switch (evtype) {
 	case anev_reg_unreg:
-		snprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=%s",
-				(code & IPA_ADDR_CHANGE_CODE_REMOVAL)
-				? "deregister" : "register");
+		scnprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=%s",
+			  (code & IPA_ADDR_CHANGE_CODE_REMOVAL)
+			  ? "deregister" : "register");
 		env[i] = str[i]; i++;
 		if (code & IPA_ADDR_CHANGE_CODE_VLANID) {
-			snprintf(str[i], sizeof(str[i]), "VLAN=%d",
-				addr_lnid->lnid);
+			scnprintf(str[i], sizeof(str[i]), "VLAN=%d",
+				  addr_lnid->lnid);
 			env[i] = str[i]; i++;
 		}
 		if (code & IPA_ADDR_CHANGE_CODE_MACADDR) {
-			snprintf(str[i], sizeof(str[i]), "MAC=%pM",
-				addr_lnid->mac);
+			scnprintf(str[i], sizeof(str[i]), "MAC=%pM",
+				  addr_lnid->mac);
 			env[i] = str[i]; i++;
 		}
-		snprintf(str[i], sizeof(str[i]), "NTOK_BUSID=%x.%x.%04x",
-			token->cssid, token->ssid, token->devnum);
+		scnprintf(str[i], sizeof(str[i]), "NTOK_BUSID=%x.%x.%04x",
+			  token->cssid, token->ssid, token->devnum);
 		env[i] = str[i]; i++;
-		snprintf(str[i], sizeof(str[i]), "NTOK_IID=%02x", token->iid);
+		scnprintf(str[i], sizeof(str[i]), "NTOK_IID=%02x", token->iid);
 		env[i] = str[i]; i++;
-		snprintf(str[i], sizeof(str[i]), "NTOK_CHPID=%02x",
-				token->chpid);
+		scnprintf(str[i], sizeof(str[i]), "NTOK_CHPID=%02x",
+			  token->chpid);
 		env[i] = str[i]; i++;
-		snprintf(str[i], sizeof(str[i]), "NTOK_CHID=%04x", token->chid);
+		scnprintf(str[i], sizeof(str[i]), "NTOK_CHID=%04x",
+			  token->chid);
 		env[i] = str[i]; i++;
 		break;
 	case anev_abort:
-		snprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=abort");
+		scnprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=abort");
 		env[i] = str[i]; i++;
 		break;
 	case anev_reset:
-		snprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=reset");
+		scnprintf(str[i], sizeof(str[i]), "BRIDGEDHOST=reset");
 		env[i] = str[i]; i++;
 		break;
 	}
@@ -1300,17 +1315,17 @@ static void qeth_bridge_state_change_worker(struct work_struct *work)
 		NULL
 	};
 
-	snprintf(env_locrem, sizeof(env_locrem), "BRIDGEPORT=statechange");
-	snprintf(env_role, sizeof(env_role), "ROLE=%s",
-		(data->role == QETH_SBP_ROLE_NONE) ? "none" :
-		(data->role == QETH_SBP_ROLE_PRIMARY) ? "primary" :
-		(data->role == QETH_SBP_ROLE_SECONDARY) ? "secondary" :
-		"<INVALID>");
-	snprintf(env_state, sizeof(env_state), "STATE=%s",
-		(data->state == QETH_SBP_STATE_INACTIVE) ? "inactive" :
-		(data->state == QETH_SBP_STATE_STANDBY) ? "standby" :
-		(data->state == QETH_SBP_STATE_ACTIVE) ? "active" :
-		"<INVALID>");
+	scnprintf(env_locrem, sizeof(env_locrem), "BRIDGEPORT=statechange");
+	scnprintf(env_role, sizeof(env_role), "ROLE=%s",
+		  (data->role == QETH_SBP_ROLE_NONE) ? "none" :
+		  (data->role == QETH_SBP_ROLE_PRIMARY) ? "primary" :
+		  (data->role == QETH_SBP_ROLE_SECONDARY) ? "secondary" :
+		  "<INVALID>");
+	scnprintf(env_state, sizeof(env_state), "STATE=%s",
+		  (data->state == QETH_SBP_STATE_INACTIVE) ? "inactive" :
+		  (data->state == QETH_SBP_STATE_STANDBY) ? "standby" :
+		  (data->state == QETH_SBP_STATE_ACTIVE) ? "active" :
+		  "<INVALID>");
 	kobject_uevent_env(&data->card->gdev->dev.kobj,
 				KOBJ_CHANGE, env);
 	kfree(data);
@@ -1516,8 +1531,8 @@ static void qeth_addr_change_event(struct qeth_card *card,
 	else
 		INIT_DELAYED_WORK(&data->dwork, qeth_l2_dev2br_worker);
 	data->card = card;
-	memcpy(&data->ac_event, hostevs,
-			sizeof(struct qeth_ipacmd_addr_change) + extrasize);
+	data->ac_event = *hostevs;
+	memcpy(data->ac_event.entry, hostevs->entry, extrasize);
 	queue_delayed_work(card->event_wq, &data->dwork, 0);
 }
 

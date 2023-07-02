@@ -17,8 +17,7 @@ struct mlx5e_rss_params_hash;
 
 enum mlx5e_rx_res_features {
 	MLX5E_RX_RES_FEATURE_INNER_FT = BIT(0),
-	MLX5E_RX_RES_FEATURE_XSK = BIT(1),
-	MLX5E_RX_RES_FEATURE_PTP = BIT(2),
+	MLX5E_RX_RES_FEATURE_PTP = BIT(1),
 };
 
 /* Setup */
@@ -32,20 +31,15 @@ void mlx5e_rx_res_free(struct mlx5e_rx_res *res);
 
 /* TIRN getters for flow steering */
 u32 mlx5e_rx_res_get_tirn_direct(struct mlx5e_rx_res *res, unsigned int ix);
-u32 mlx5e_rx_res_get_tirn_xsk(struct mlx5e_rx_res *res, unsigned int ix);
 u32 mlx5e_rx_res_get_tirn_rss(struct mlx5e_rx_res *res, enum mlx5_traffic_types tt);
 u32 mlx5e_rx_res_get_tirn_rss_inner(struct mlx5e_rx_res *res, enum mlx5_traffic_types tt);
 u32 mlx5e_rx_res_get_tirn_ptp(struct mlx5e_rx_res *res);
 
-/* RQTN getters for modules that create their own TIRs */
-u32 mlx5e_rx_res_get_rqtn_direct(struct mlx5e_rx_res *res, unsigned int ix);
-
 /* Activate/deactivate API */
 void mlx5e_rx_res_channels_activate(struct mlx5e_rx_res *res, struct mlx5e_channels *chs);
 void mlx5e_rx_res_channels_deactivate(struct mlx5e_rx_res *res);
-int mlx5e_rx_res_xsk_activate(struct mlx5e_rx_res *res, struct mlx5e_channels *chs,
-			      unsigned int ix);
-int mlx5e_rx_res_xsk_deactivate(struct mlx5e_rx_res *res, unsigned int ix);
+void mlx5e_rx_res_xsk_update(struct mlx5e_rx_res *res, struct mlx5e_channels *chs,
+			     unsigned int ix, bool xsk);
 
 /* Configuration API */
 void mlx5e_rx_res_rss_set_indir_uniform(struct mlx5e_rx_res *res, unsigned int nch);
@@ -69,4 +63,7 @@ struct mlx5e_rss *mlx5e_rx_res_rss_get(struct mlx5e_rx_res *res, u32 rss_idx);
 /* Workaround for hairpin */
 struct mlx5e_rss_params_hash mlx5e_rx_res_get_current_hash(struct mlx5e_rx_res *res);
 
+/* Accel TIRs */
+int mlx5e_rx_res_tls_tir_create(struct mlx5e_rx_res *res, unsigned int rxq,
+				struct mlx5e_tir *tir);
 #endif /* __MLX5_EN_RX_RES_H__ */

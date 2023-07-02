@@ -225,7 +225,7 @@ struct genfs {
 
 /* object context array indices */
 #define OCON_ISID	0 /* initial SIDs */
-#define OCON_FS		1 /* unlabeled file systems */
+#define OCON_FS		1 /* unlabeled file systems (deprecated) */
 #define OCON_PORT	2 /* TCP and UDP port numbers */
 #define OCON_NETIF	3 /* network interfaces */
 #define OCON_NODE	4 /* nodes */
@@ -370,6 +370,8 @@ static inline int put_entry(const void *buf, size_t bytes, int num, struct polic
 {
 	size_t len = bytes * num;
 
+	if (len > fp->len)
+		return -EINVAL;
 	memcpy(fp->data, buf, len);
 	fp->data += len;
 	fp->len -= len;

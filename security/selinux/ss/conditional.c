@@ -38,7 +38,7 @@ static int cond_evaluate_expr(struct policydb *p, struct cond_expr *expr)
 			if (sp == (COND_EXPR_MAXDEPTH - 1))
 				return -1;
 			sp++;
-			s[sp] = p->bool_val_to_struct[node->bool - 1]->state;
+			s[sp] = p->bool_val_to_struct[node->boolean - 1]->state;
 			break;
 		case COND_NOT:
 			if (sp < 0)
@@ -152,6 +152,8 @@ static void cond_list_destroy(struct policydb *p)
 	for (i = 0; i < p->cond_list_len; i++)
 		cond_node_destroy(&p->cond_list[i]);
 	kfree(p->cond_list);
+	p->cond_list = NULL;
+	p->cond_list_len = 0;
 }
 
 void cond_policydb_destroy(struct policydb *p)
@@ -364,7 +366,7 @@ static int expr_node_isvalid(struct policydb *p, struct cond_expr_node *expr)
 		return 0;
 	}
 
-	if (expr->bool > p->p_bools.nprim) {
+	if (expr->boolean > p->p_bools.nprim) {
 		pr_err("SELinux: conditional expressions uses unknown bool.\n");
 		return 0;
 	}
@@ -399,7 +401,7 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, void *fp)
 			return rc;
 
 		expr->expr_type = le32_to_cpu(buf[0]);
-		expr->bool = le32_to_cpu(buf[1]);
+		expr->boolean = le32_to_cpu(buf[1]);
 
 		if (!expr_node_isvalid(p, expr))
 			return -EINVAL;
@@ -441,7 +443,6 @@ int cond_read_list(struct policydb *p, void *fp)
 	return 0;
 err:
 	cond_list_destroy(p);
-	p->cond_list = NULL;
 	return rc;
 }
 
@@ -517,7 +518,7 @@ static int cond_write_node(struct policydb *p, struct cond_node *node,
 
 	for (i = 0; i < node->expr.len; i++) {
 		buf[0] = cpu_to_le32(node->expr.nodes[i].expr_type);
-		buf[1] = cpu_to_le32(node->expr.nodes[i].bool);
+		buf[1] = cpu_to_le32(node->expr.nodes[i].boolean);
 		rc = put_entry(buf, sizeof(u32), 2, fp);
 		if (rc)
 			return rc;
@@ -566,8 +567,6 @@ void cond_compute_xperms(struct avtab *ctab, struct avtab_key *key,
 		if (node->key.specified & AVTAB_ENABLED)
 			services_compute_xperms_decision(xpermd, node);
 	}
-	return;
-
 }
 /* Determine whether additional permissions are granted by the conditional
  * av table, and if so, add them to the result

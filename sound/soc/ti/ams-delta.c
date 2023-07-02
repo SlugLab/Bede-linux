@@ -471,8 +471,8 @@ static int ams_delta_cx20442_init(struct snd_soc_pcm_runtime *rtd)
 
 	/* Add hook switch - can be used to control the codec from userspace
 	 * even if line discipline fails */
-	ret = snd_soc_card_jack_new(card, "hook_switch", SND_JACK_HEADSET,
-				    &ams_delta_hook_switch, NULL, 0);
+	ret = snd_soc_card_jack_new_pins(card, "hook_switch", SND_JACK_HEADSET,
+					 &ams_delta_hook_switch, NULL, 0);
 	if (ret)
 		dev_warn(card->dev,
 				"Failed to allocate resources for hook switch, "
@@ -578,7 +578,7 @@ static int ams_delta_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ams_delta_remove(struct platform_device *pdev)
+static void ams_delta_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
@@ -586,7 +586,6 @@ static int ams_delta_remove(struct platform_device *pdev)
 
 	snd_soc_unregister_card(card);
 	card->dev = NULL;
-	return 0;
 }
 
 #define DRV_NAME "ams-delta-audio"
@@ -596,7 +595,7 @@ static struct platform_driver ams_delta_driver = {
 		.name = DRV_NAME,
 	},
 	.probe = ams_delta_probe,
-	.remove = ams_delta_remove,
+	.remove_new = ams_delta_remove,
 };
 
 module_platform_driver(ams_delta_driver);

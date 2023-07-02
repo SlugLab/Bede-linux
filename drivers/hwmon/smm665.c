@@ -671,12 +671,11 @@ out_unregister:
 	return ret;
 }
 
-static int smm665_remove(struct i2c_client *client)
+static void smm665_remove(struct i2c_client *client)
 {
 	struct smm665_data *data = i2c_get_clientdata(client);
 
 	i2c_unregister_device(data->cmdreg);
-	return 0;
 }
 
 static const struct i2c_device_id smm665_id[] = {
@@ -695,7 +694,7 @@ static struct i2c_driver smm665_driver = {
 	.driver = {
 		   .name = "smm665",
 		   },
-	.probe_new = smm665_probe,
+	.probe = smm665_probe,
 	.remove = smm665_remove,
 	.id_table = smm665_id,
 };

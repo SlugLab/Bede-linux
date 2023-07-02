@@ -27,7 +27,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/console.h>
 #include <linux/pci.h>
 #include <linux/poll.h>
 #include <linux/wait.h>
@@ -36,6 +35,7 @@
 #include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_fbdev_generic.h>
 #include <drm/drm_file.h>
 
 #include "virtgpu_drv.h"
@@ -47,12 +47,11 @@ static int virtio_gpu_modeset = -1;
 MODULE_PARM_DESC(modeset, "Disable/Enable modesetting");
 module_param_named(modeset, virtio_gpu_modeset, int, 0400);
 
-static int virtio_gpu_pci_quirk(struct drm_device *dev, struct virtio_device *vdev)
+static int virtio_gpu_pci_quirk(struct drm_device *dev)
 {
-	struct pci_dev *pdev = to_pci_dev(vdev->dev.parent);
+	struct pci_dev *pdev = to_pci_dev(dev->dev);
 	const char *pname = dev_name(&pdev->dev);
 	bool vga = (pdev->class >> 8) == PCI_CLASS_DISPLAY_VGA;
-	char unique[20];
 	int ret;
 
 	DRM_INFO("pci: %s detected at %s\n",
@@ -64,39 +63,7 @@ static int virtio_gpu_pci_quirk(struct drm_device *dev, struct virtio_device *vd
 			return ret;
 	}
 
-	/*
-	 * Normally the drm_dev_set_unique() call is done by core DRM.
-	 * The following comment covers, why virtio cannot rely on it.
-	 *
-	 * Unlike the other virtual GPU drivers, virtio abstracts the
-	 * underlying bus type by using struct virtio_device.
-	 *
-	 * Hence the dev_is_pci() check, used in core DRM, will fail
-	 * and the unique returned will be the virtio_device "virtio0",
-	 * while a "pci:..." one is required.
-	 *
-	 * A few other ideas were considered:
-	 * - Extend the dev_is_pci() check [in drm_set_busid] to
-	 *   consider virtio.
-	 *   Seems like a bigger hack than what we have already.
-	 *
-	 * - Point drm_device::dev to the parent of the virtio_device
-	 *   Semantic changes:
-	 *   * Using the wrong device for i2c, framebuffer_alloc and
-	 *     prime import.
-	 *   Visual changes:
-	 *   * Helpers such as DRM_DEV_ERROR, dev_info, drm_printer,
-	 *     will print the wrong information.
-	 *
-	 * We could address the latter issues, by introducing
-	 * drm_device::bus_dev, ... which would be used solely for this.
-	 *
-	 * So for the moment keep things as-is, with a bulky comment
-	 * for the next person who feels like removing this
-	 * drm_dev_set_unique() quirk.
-	 */
-	snprintf(unique, sizeof(unique), "pci:%s", pname);
-	return drm_dev_set_unique(dev, unique);
+	return 0;
 }
 
 static int virtio_gpu_probe(struct virtio_device *vdev)
@@ -104,24 +71,30 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	struct drm_device *dev;
 	int ret;
 
-	if (vgacon_text_force() && virtio_gpu_modeset == -1)
+	if (drm_firmware_drivers_only() && virtio_gpu_modeset == -1)
 		return -EINVAL;
 
 	if (virtio_gpu_modeset == 0)
 		return -EINVAL;
 
-	dev = drm_dev_alloc(&driver, &vdev->dev);
+	/*
+	 * The virtio-gpu device is a virtual device that doesn't have DMA
+	 * ops assigned to it, nor DMA mask set and etc. Its parent device
+	 * is actual GPU device we want to use it for the DRM's device in
+	 * order to benefit from using generic DRM APIs.
+	 */
+	dev = drm_dev_alloc(&driver, vdev->dev.parent);
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
 	vdev->priv = dev;
 
-	if (!strcmp(vdev->dev.parent->bus->name, "pci")) {
-		ret = virtio_gpu_pci_quirk(dev, vdev);
+	if (dev_is_pci(vdev->dev.parent)) {
+		ret = virtio_gpu_pci_quirk(dev);
 		if (ret)
 			goto err_free;
 	}
 
-	ret = virtio_gpu_init(dev);
+	ret = virtio_gpu_init(vdev, dev);
 	if (ret)
 		goto err_free;
 
@@ -155,36 +128,6 @@ static void virtio_gpu_config_changed(struct virtio_device *vdev)
 	struct virtio_gpu_device *vgdev = dev->dev_private;
 
 	schedule_work(&vgdev->config_changed_work);
-}
-
-static __poll_t virtio_gpu_poll(struct file *filp,
-				struct poll_table_struct *wait)
-{
-	struct drm_file *drm_file = filp->private_data;
-	struct virtio_gpu_fpriv *vfpriv = drm_file->driver_priv;
-	struct drm_device *dev = drm_file->minor->dev;
-	struct virtio_gpu_device *vgdev = dev->dev_private;
-	struct drm_pending_event *e = NULL;
-	__poll_t mask = 0;
-
-	if (!vgdev->has_virgl_3d || !vfpriv || !vfpriv->ring_idx_mask)
-		return drm_poll(filp, wait);
-
-	poll_wait(filp, &drm_file->event_wait, wait);
-
-	if (!list_empty(&drm_file->event_list)) {
-		spin_lock_irq(&dev->event_lock);
-		e = list_first_entry(&drm_file->event_list,
-				     struct drm_pending_event, link);
-		drm_file->event_space += e->event->length;
-		list_del(&e->link);
-		spin_unlock_irq(&dev->event_lock);
-
-		kfree(e);
-		mask |= EPOLLIN | EPOLLRDNORM;
-	}
-
-	return mask;
 }
 
 static struct virtio_device_id id_table[] = {
@@ -226,19 +169,13 @@ MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");
 MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
 MODULE_AUTHOR("Alon Levy");
 
-static const struct file_operations virtio_gpu_driver_fops = {
-	.owner          = THIS_MODULE,
-	.open           = drm_open,
-	.release        = drm_release,
-	.unlocked_ioctl = drm_ioctl,
-	.compat_ioctl   = drm_compat_ioctl,
-	.poll           = virtio_gpu_poll,
-	.read           = drm_read,
-	.llseek         = noop_llseek,
-	.mmap           = drm_gem_mmap
-};
+DEFINE_DRM_GEM_FOPS(virtio_gpu_driver_fops);
 
 static const struct drm_driver driver = {
+	/*
+	 * If KMS is disabled DRIVER_MODESET and DRIVER_ATOMIC are masked
+	 * out via drm_device::driver_features:
+	 */
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_RENDER | DRIVER_ATOMIC,
 	.open = virtio_gpu_driver_open,
 	.postclose = virtio_gpu_driver_postclose,

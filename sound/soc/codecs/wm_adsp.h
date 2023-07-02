@@ -28,19 +28,30 @@ struct wm_adsp {
 	struct cs_dsp cs_dsp;
 	const char *part;
 	const char *fwf_name;
+	const char *system_name;
 	struct snd_soc_component *component;
 
 	unsigned int sys_config_size;
 
 	int fw;
+	bool wmfw_optional;
 
 	struct work_struct boot_work;
+	int (*pre_run)(struct wm_adsp *dsp);
 
 	bool preloaded;
 	bool fatal_error;
 
 	struct list_head compr_list;
 	struct list_head buffer_list;
+
+	/*
+	 * Flag indicating the preloader widget only needs power toggled
+	 * on state change rather than held on for the duration of the
+	 * preload, useful for devices that can retain firmware memory
+	 * across power down.
+	 */
+	bool toggle_preload;
 };
 
 #define WM_ADSP1(wname, num) \
@@ -79,6 +90,8 @@ int wm_adsp1_event(struct snd_soc_dapm_widget *w,
 
 int wm_adsp_early_event(struct snd_soc_dapm_widget *w,
 			struct snd_kcontrol *kcontrol, int event);
+
+int wm_adsp_power_up(struct wm_adsp *dsp);
 
 irqreturn_t wm_adsp2_bus_error(int irq, void *data);
 irqreturn_t wm_halo_bus_error(int irq, void *data);

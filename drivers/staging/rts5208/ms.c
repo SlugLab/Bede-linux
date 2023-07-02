@@ -1749,11 +1749,10 @@ static int ms_copy_page(struct rtsx_chip *chip, u16 old_blk, u16 new_blk,
 
 				for (rty_cnt = 0; rty_cnt < MS_MAX_RETRY_COUNT;
 				     rty_cnt++) {
-					retval = ms_transfer_tpc(
-						chip,
-						MS_TM_NORMAL_WRITE,
-						WRITE_PAGE_DATA,
-						0, NO_WAIT_INT);
+					retval = ms_transfer_tpc(chip,
+								 MS_TM_NORMAL_WRITE,
+								 WRITE_PAGE_DATA,
+								 0, NO_WAIT_INT);
 					if (retval == STATUS_SUCCESS)
 						break;
 				}
@@ -1769,6 +1768,8 @@ static int ms_copy_page(struct rtsx_chip *chip, u16 old_blk, u16 new_blk,
 
 		retval = ms_set_rw_reg_addr(chip, OVERWRITE_FLAG, MS_EXTRA_SIZE,
 					    SYSTEM_PARAM, (6 + MS_EXTRA_SIZE));
+		if (retval != STATUS_SUCCESS)
+			return STATUS_FAIL;
 
 		ms_set_err_code(chip, MS_NO_ERROR);
 

@@ -1698,8 +1698,7 @@ static void ov13858_free_controls(struct ov13858 *ov13858)
 	mutex_destroy(&ov13858->mutex);
 }
 
-static int ov13858_probe(struct i2c_client *client,
-			 const struct i2c_device_id *devid)
+static int ov13858_probe(struct i2c_client *client)
 {
 	struct ov13858 *ov13858;
 	int ret;
@@ -1769,7 +1768,7 @@ error_handler_free:
 	return ret;
 }
 
-static int ov13858_remove(struct i2c_client *client)
+static void ov13858_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ov13858 *ov13858 = to_ov13858(sd);
@@ -1779,8 +1778,6 @@ static int ov13858_remove(struct i2c_client *client)
 	ov13858_free_controls(ov13858);
 
 	pm_runtime_disable(&client->dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id ov13858_id_table[] = {
@@ -1809,7 +1806,7 @@ static struct i2c_driver ov13858_i2c_driver = {
 		.pm = &ov13858_pm_ops,
 		.acpi_match_table = ACPI_PTR(ov13858_acpi_ids),
 	},
-	.probe = ov13858_probe,
+	.probe_new = ov13858_probe,
 	.remove = ov13858_remove,
 	.id_table = ov13858_id_table,
 };
@@ -1818,6 +1815,6 @@ module_i2c_driver(ov13858_i2c_driver);
 
 MODULE_AUTHOR("Kan, Chris <chris.kan@intel.com>");
 MODULE_AUTHOR("Rapolu, Chiranjeevi <chiranjeevi.rapolu@intel.com>");
-MODULE_AUTHOR("Yang, Hyungwoo <hyungwoo.yang@intel.com>");
+MODULE_AUTHOR("Yang, Hyungwoo");
 MODULE_DESCRIPTION("Omnivision ov13858 sensor driver");
 MODULE_LICENSE("GPL v2");

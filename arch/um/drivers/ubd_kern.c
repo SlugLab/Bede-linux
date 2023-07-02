@@ -108,9 +108,9 @@ static inline void ubd_set_bit(__u64 bit, unsigned char *data)
 static DEFINE_MUTEX(ubd_lock);
 static DEFINE_MUTEX(ubd_mutex); /* replaces BKL, might not be needed */
 
-static int ubd_open(struct block_device *bdev, fmode_t mode);
-static void ubd_release(struct gendisk *disk, fmode_t mode);
-static int ubd_ioctl(struct block_device *bdev, fmode_t mode,
+static int ubd_open(struct gendisk *disk, blk_mode_t mode);
+static void ubd_release(struct gendisk *disk);
+static int ubd_ioctl(struct block_device *bdev, blk_mode_t mode,
 		     unsigned int cmd, unsigned long arg);
 static int ubd_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 
@@ -483,7 +483,6 @@ static void ubd_handler(void)
 			if ((io_req->error == BLK_STS_NOTSUPP) && (req_op(io_req->req) == REQ_OP_DISCARD)) {
 				blk_queue_max_discard_sectors(io_req->req->q, 0);
 				blk_queue_max_write_zeroes_sectors(io_req->req->q, 0);
-				blk_queue_flag_clear(QUEUE_FLAG_DISCARD, io_req->req->q);
 			}
 			blk_mq_end_request(io_req->req, io_req->error);
 			kfree(io_req);
@@ -800,10 +799,8 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 	}
 	if (ubd_dev->no_trim == 0) {
 		ubd_dev->queue->limits.discard_granularity = SECTOR_SIZE;
-		ubd_dev->queue->limits.discard_alignment = SECTOR_SIZE;
 		blk_queue_max_discard_sectors(ubd_dev->queue, UBD_MAX_REQUEST);
 		blk_queue_max_write_zeroes_sectors(ubd_dev->queue, UBD_MAX_REQUEST);
-		blk_queue_flag_set(QUEUE_FLAG_DISCARD, ubd_dev->queue);
 	}
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, ubd_dev->queue);
 	return 0;
@@ -928,7 +925,7 @@ static int ubd_add(int n, char **error_out)
 	return 0;
 
 out_cleanup_disk:
-	blk_cleanup_disk(disk);
+	put_disk(disk);
 out_cleanup_tags:
 	blk_mq_free_tag_set(&ubd_dev->tag_set);
 out:
@@ -1035,7 +1032,7 @@ static int ubd_remove(int n, char **error_out)
 	ubd_gendisk[n] = NULL;
 	if(disk != NULL){
 		del_gendisk(disk);
-		blk_cleanup_disk(disk);
+		put_disk(disk);
 	}
 
 	err = 0;
@@ -1157,9 +1154,8 @@ static int __init ubd_driver_init(void){
 
 device_initcall(ubd_driver_init);
 
-static int ubd_open(struct block_device *bdev, fmode_t mode)
+static int ubd_open(struct gendisk *disk, blk_mode_t mode)
 {
-	struct gendisk *disk = bdev->bd_disk;
 	struct ubd *ubd_dev = disk->private_data;
 	int err = 0;
 
@@ -1174,19 +1170,12 @@ static int ubd_open(struct block_device *bdev, fmode_t mode)
 	}
 	ubd_dev->count++;
 	set_disk_ro(disk, !ubd_dev->openflags.w);
-
-	/* This should no more be needed. And it didn't work anyway to exclude
-	 * read-write remounting of filesystems.*/
-	/*if((mode & FMODE_WRITE) && !ubd_dev->openflags.w){
-	        if(--ubd_dev->count == 0) ubd_close_dev(ubd_dev);
-	        err = -EROFS;
-	}*/
 out:
 	mutex_unlock(&ubd_mutex);
 	return err;
 }
 
-static void ubd_release(struct gendisk *disk, fmode_t mode)
+static void ubd_release(struct gendisk *disk)
 {
 	struct ubd *ubd_dev = disk->private_data;
 
@@ -1265,7 +1254,7 @@ static void ubd_map_req(struct ubd *dev, struct io_thread_req *io_req,
 	struct req_iterator iter;
 	int i = 0;
 	unsigned long byte_offset = io_req->offset;
-	int op = req_op(req);
+	enum req_op op = req_op(req);
 
 	if (op == REQ_OP_WRITE_ZEROES || op == REQ_OP_DISCARD) {
 		io_req->io_desc[0].buffer = NULL;
@@ -1328,7 +1317,7 @@ static int ubd_submit_request(struct ubd *dev, struct request *req)
 	int segs = 0;
 	struct io_thread_req *io_req;
 	int ret;
-	int op = req_op(req);
+	enum req_op op = req_op(req);
 
 	if (op == REQ_OP_FLUSH)
 		segs = 0;
@@ -1400,7 +1389,7 @@ static int ubd_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	return 0;
 }
 
-static int ubd_ioctl(struct block_device *bdev, fmode_t mode,
+static int ubd_ioctl(struct block_device *bdev, blk_mode_t mode,
 		     unsigned int cmd, unsigned long arg)
 {
 	struct ubd *ubd_dev = bdev->bd_disk->private_data;
@@ -1526,8 +1515,14 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 			}
 			break;
 		case REQ_OP_DISCARD:
-		case REQ_OP_WRITE_ZEROES:
 			n = os_falloc_punch(req->fds[bit], off, len);
+			if (n) {
+				req->error = map_error(-n);
+				return;
+			}
+			break;
+		case REQ_OP_WRITE_ZEROES:
+			n = os_falloc_zeroes(req->fds[bit], off, len);
 			if (n) {
 				req->error = map_error(-n);
 				return;
@@ -1552,7 +1547,7 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 int kernel_fd = -1;
 
 /* Only changed by the io thread. XXX: currently unused. */
-static int io_count = 0;
+static int io_count;
 
 int io_thread(void *arg)
 {

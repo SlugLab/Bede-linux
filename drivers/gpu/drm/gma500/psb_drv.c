@@ -7,6 +7,7 @@
  *
  **************************************************************************/
 
+#include <linux/aperture.h>
 #include <linux/cpu.h>
 #include <linux/module.h>
 #include <linux/notifier.h>
@@ -20,13 +21,13 @@
 
 #include <drm/drm.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
 #include <drm/drm_file.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_pciids.h>
 #include <drm/drm_vblank.h>
 
 #include "framebuffer.h"
+#include "gem.h"
 #include "intel_bios.h"
 #include "mid_bios.h"
 #include "power.h"
@@ -98,7 +99,7 @@ static const struct drm_ioctl_desc psb_ioctls[] = {
  *
  *	Soft reset the graphics engine and then reload the necessary registers.
  */
-void psb_spank(struct drm_psb_private *dev_priv)
+static void psb_spank(struct drm_psb_private *dev_priv)
 {
 	PSB_WSGX32(_PSB_CS_RESET_BIF_RESET | _PSB_CS_RESET_DPM_RESET |
 		_PSB_CS_RESET_TA_RESET | _PSB_CS_RESET_USE_RESET |
@@ -167,9 +168,10 @@ static void psb_driver_unload(struct drm_device *dev)
 
 	/* TODO: Kill vblank etc here */
 
-	if (dev_priv->backlight_device)
-		gma_backlight_exit(dev);
+	gma_backlight_exit(dev);
 	psb_modeset_cleanup(dev);
+
+	gma_irq_uninstall(dev);
 
 	if (dev_priv->ops->chip_teardown)
 		dev_priv->ops->chip_teardown(dev);
@@ -183,17 +185,16 @@ static void psb_driver_unload(struct drm_device *dev)
 	if (dev_priv->mmu) {
 		struct psb_gtt *pg = &dev_priv->gtt;
 
-		down_read(&pg->sem);
 		psb_mmu_remove_pfn_sequence(
 			psb_mmu_get_default_pd
 			(dev_priv->mmu),
 			pg->mmu_gatt_start,
 			dev_priv->vram_stolen_size >> PAGE_SHIFT);
-		up_read(&pg->sem);
 		psb_mmu_driver_takedown(dev_priv->mmu);
 		dev_priv->mmu = NULL;
 	}
-	psb_gtt_takedown(dev);
+	psb_gem_mm_fini(dev);
+	psb_gtt_fini(dev);
 	if (dev_priv->scratch_page) {
 		set_pages_wb(dev_priv->scratch_page, 1);
 		__free_page(dev_priv->scratch_page);
@@ -233,10 +234,11 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
 	unsigned long resource_start, resource_len;
 	unsigned long irqflags;
-	int ret = -ENOMEM;
+	struct drm_connector_list_iter conn_iter;
 	struct drm_connector *connector;
 	struct gma_encoder *gma_encoder;
 	struct psb_gtt *pg;
+	int ret = -ENOMEM;
 
 	/* initializing driver private data */
 
@@ -325,7 +327,10 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
 
 	set_pages_uc(dev_priv->scratch_page, 1);
 
-	ret = psb_gtt_init(dev, 0);
+	ret = psb_gtt_init(dev);
+	if (ret)
+		goto out_err;
+	ret = psb_gem_mm_init(dev);
 	if (ret)
 		goto out_err;
 
@@ -344,12 +349,10 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
 		return ret;
 
 	/* Add stolen memory to SGX MMU */
-	down_read(&pg->sem);
 	ret = psb_mmu_insert_pfn_sequence(psb_mmu_get_default_pd(dev_priv->mmu),
 					  dev_priv->stolen_base >> PAGE_SHIFT,
 					  pg->gatt_start,
 					  pg->stolen_size >> PAGE_SHIFT, 0);
-	up_read(&pg->sem);
 
 	psb_mmu_set_pd_context(psb_mmu_get_default_pd(dev_priv->mmu), 0);
 	psb_mmu_set_pd_context(dev_priv->pf_pd, 1);
@@ -378,35 +381,31 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
 	PSB_WVDC32(0xFFFFFFFF, PSB_INT_MASK_R);
 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
 
-	psb_irq_install(dev, pdev->irq);
+	gma_irq_install(dev);
 
 	dev->max_vblank_count = 0xffffff; /* only 24 bits of frame count */
 
 	psb_modeset_init(dev);
-	psb_fbdev_init(dev);
 	drm_kms_helper_poll_init(dev);
 
-	/* Only add backlight support if we have LVDS output */
-	list_for_each_entry(connector, &dev->mode_config.connector_list,
-			    head) {
+	/* Only add backlight support if we have LVDS or MIPI output */
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
 		gma_encoder = gma_attached_encoder(connector);
 
-		switch (gma_encoder->type) {
-		case INTEL_OUTPUT_LVDS:
-		case INTEL_OUTPUT_MIPI:
+		if (gma_encoder->type == INTEL_OUTPUT_LVDS ||
+		    gma_encoder->type == INTEL_OUTPUT_MIPI) {
 			ret = gma_backlight_init(dev);
+			if (ret == 0)
+				acpi_video_register_backlight();
 			break;
 		}
 	}
+	drm_connector_list_iter_end(&conn_iter);
 
 	if (ret)
 		return ret;
 	psb_intel_opregion_enable_asle(dev);
-#if 0
-	/* Enable runtime pm at last */
-	pm_runtime_enable(dev->dev);
-	pm_runtime_set_active(dev->dev);
-#endif
 
 	return devm_add_action_or_reset(dev->dev, psb_device_release, dev);
 
@@ -415,31 +414,36 @@ out_err:
 	return ret;
 }
 
-static inline void get_brightness(struct backlight_device *bd)
+/*
+ * Hardware for gma500 is a hybrid device, which both acts as a PCI
+ * device (for legacy vga functionality) but also more like an
+ * integrated display on a SoC where the framebuffer simply
+ * resides in main memory and not in a special PCI bar (that
+ * internally redirects to a stolen range of main memory) like all
+ * other integrated PCI display devices implement it.
+ *
+ * To catch all cases we need to remove conflicting firmware devices
+ * for the stolen system memory and for the VGA functionality. As we
+ * currently cannot easily find the framebuffer's location in stolen
+ * memory, we remove all framebuffers here.
+ *
+ * TODO: Refactor psb_driver_load() to map vdc_reg earlier. Then
+ *       we might be able to read the framebuffer range from the
+ *       device.
+ */
+static int gma_remove_conflicting_framebuffers(struct pci_dev *pdev,
+					       const struct drm_driver *req_driver)
 {
-#ifdef CONFIG_BACKLIGHT_CLASS_DEVICE
-	if (bd) {
-		bd->props.brightness = bd->ops->get_brightness(bd);
-		backlight_update_status(bd);
-	}
-#endif
-}
+	resource_size_t base = 0;
+	resource_size_t size = U32_MAX; /* 4 GiB HW limit */
+	const char *name = req_driver->name;
+	int ret;
 
-static long psb_unlocked_ioctl(struct file *filp, unsigned int cmd,
-			       unsigned long arg)
-{
-	struct drm_file *file_priv = filp->private_data;
-	struct drm_device *dev = file_priv->minor->dev;
-	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
-	static unsigned int runtime_allowed;
+	ret = aperture_remove_conflicting_devices(base, size, name);
+	if (ret)
+		return ret;
 
-	if (runtime_allowed == 1 && dev_priv->is_lvds_on) {
-		runtime_allowed++;
-		pm_runtime_allow(dev->dev);
-		dev_priv->rpm_enabled = 1;
-	}
-	return drm_ioctl(filp, cmd, arg);
-	/* FIXME: do we need to wrap the other side of this */
+	return __aperture_remove_legacy_vga_devices(pdev);
 }
 
 static int psb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -447,6 +451,10 @@ static int psb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct drm_psb_private *dev_priv;
 	struct drm_device *dev;
 	int ret;
+
+	ret = gma_remove_conflicting_framebuffers(pdev, &driver);
+	if (ret)
+		return ret;
 
 	ret = pcim_enable_device(pdev);
 	if (ret)
@@ -467,6 +475,8 @@ static int psb_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		return ret;
 
+	psb_fbdev_setup(dev_priv);
+
 	return 0;
 }
 
@@ -477,22 +487,13 @@ static void psb_pci_remove(struct pci_dev *pdev)
 	drm_dev_unregister(dev);
 }
 
-static const struct dev_pm_ops psb_pm_ops = {
-	.resume = gma_power_resume,
-	.suspend = gma_power_suspend,
-	.thaw = gma_power_thaw,
-	.freeze = gma_power_freeze,
-	.restore = gma_power_restore,
-	.runtime_suspend = psb_runtime_suspend,
-	.runtime_resume = psb_runtime_resume,
-	.runtime_idle = psb_runtime_idle,
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(psb_pm_ops, gma_power_suspend, gma_power_resume, NULL);
 
 static const struct file_operations psb_gem_fops = {
 	.owner = THIS_MODULE,
 	.open = drm_open,
 	.release = drm_release,
-	.unlocked_ioctl = psb_unlocked_ioctl,
+	.unlocked_ioctl = drm_ioctl,
 	.compat_ioctl = drm_compat_ioctl,
 	.mmap = drm_gem_mmap,
 	.poll = drm_poll,
@@ -501,7 +502,6 @@ static const struct file_operations psb_gem_fops = {
 
 static const struct drm_driver driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM,
-	.lastclose = drm_fb_helper_lastclose,
 
 	.num_ioctls = ARRAY_SIZE(psb_ioctls),
 
@@ -526,6 +526,9 @@ static struct pci_driver psb_pci_driver = {
 
 static int __init psb_init(void)
 {
+	if (drm_firmware_drivers_only())
+		return -ENODEV;
+
 	return pci_register_driver(&psb_pci_driver);
 }
 

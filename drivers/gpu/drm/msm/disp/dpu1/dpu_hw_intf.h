@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _DPU_HW_INTF_H
@@ -8,7 +10,6 @@
 #include "dpu_hw_catalog.h"
 #include "dpu_hw_mdss.h"
 #include "dpu_hw_util.h"
-#include "dpu_hw_blk.h"
 
 struct dpu_hw_intf;
 
@@ -30,6 +31,8 @@ struct intf_timing_params {
 	u32 border_clr;
 	u32 underflow_clr;
 	u32 hsync_skew;
+
+	bool wide_bus_en;
 };
 
 struct intf_prog_fetch {
@@ -55,6 +58,19 @@ struct intf_status {
  * @ get_line_count: reads current vertical line counter
  * @bind_pingpong_blk: enable/disable the connection with pingpong which will
  *                     feed pixels to this interface
+ * @setup_misr: enable/disable MISR
+ * @collect_misr: read MISR signature
+ * @enable_tearcheck:           Enables vsync generation and sets up init value of read
+ *                              pointer and programs the tear check configuration
+ * @disable_tearcheck:          Disables tearcheck block
+ * @connect_external_te:        Read, modify, write to either set or clear listening to external TE
+ *                              Return: 1 if TE was originally connected, 0 if not, or -ERROR
+ * @get_vsync_info:             Provides the programmed and current line_count
+ * @setup_autorefresh:          Configure and enable the autorefresh config
+ * @get_autorefresh:            Retrieve autorefresh config from hardware
+ *                              Return: 0 on success, -ETIMEDOUT on timeout
+ * @vsync_sel:                  Select vsync signal for tear-effect configuration
+ * @enable_compression:         Enable data compression
  */
 struct dpu_hw_intf_ops {
 	void (*setup_timing_gen)(struct dpu_hw_intf *intf,
@@ -73,43 +89,47 @@ struct dpu_hw_intf_ops {
 	u32 (*get_line_count)(struct dpu_hw_intf *intf);
 
 	void (*bind_pingpong_blk)(struct dpu_hw_intf *intf,
-			bool enable,
 			const enum dpu_pingpong pp);
+	void (*setup_misr)(struct dpu_hw_intf *intf, bool enable, u32 frame_count);
+	int (*collect_misr)(struct dpu_hw_intf *intf, u32 *misr_value);
+
+	// Tearcheck on INTF since DPU 5.0.0
+
+	int (*enable_tearcheck)(struct dpu_hw_intf *intf, struct dpu_hw_tear_check *cfg);
+
+	int (*disable_tearcheck)(struct dpu_hw_intf *intf);
+
+	int (*connect_external_te)(struct dpu_hw_intf *intf, bool enable_external_te);
+
+	void (*vsync_sel)(struct dpu_hw_intf *intf, u32 vsync_source);
+
+	/**
+	 * Disable autorefresh if enabled
+	 */
+	void (*disable_autorefresh)(struct dpu_hw_intf *intf, uint32_t encoder_id, u16 vdisplay);
+
+	void (*enable_compression)(struct dpu_hw_intf *intf);
 };
 
 struct dpu_hw_intf {
-	struct dpu_hw_blk base;
 	struct dpu_hw_blk_reg_map hw;
 
 	/* intf */
 	enum dpu_intf idx;
 	const struct dpu_intf_cfg *cap;
-	const struct dpu_mdss_cfg *mdss;
 
 	/* ops */
 	struct dpu_hw_intf_ops ops;
 };
 
 /**
- * to_dpu_hw_intf - convert base object dpu_hw_base to container
- * @hw: Pointer to base hardware block
- * return: Pointer to hardware block container
- */
-static inline struct dpu_hw_intf *to_dpu_hw_intf(struct dpu_hw_blk *hw)
-{
-	return container_of(hw, struct dpu_hw_intf, base);
-}
-
-/**
- * dpu_hw_intf_init(): Initializes the intf driver for the passed
- * interface idx.
- * @idx:  interface index for which driver object is required
+ * dpu_hw_intf_init() - Initializes the INTF driver for the passed
+ * interface catalog entry.
+ * @cfg:  interface catalog entry for which driver object is required
  * @addr: mapped register io address of MDP
- * @m :   pointer to mdss catalog data
  */
-struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
-		void __iomem *addr,
-		const struct dpu_mdss_cfg *m);
+struct dpu_hw_intf *dpu_hw_intf_init(const struct dpu_intf_cfg *cfg,
+		void __iomem *addr);
 
 /**
  * dpu_hw_intf_destroy(): Destroys INTF driver context

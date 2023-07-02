@@ -59,14 +59,13 @@ mt7921_tm_set(struct mt7921_dev *dev, struct mt7921_tm_cmd *req)
 		cancel_work_sync(&pm->wake_work);
 		__mt7921_mcu_drv_pmctrl(dev);
 
-		mt76_wr(dev, MT_WF_RFCR(0), dev->mt76.rxfilter);
 		phy->test.state = MT76_TM_STATE_ON;
 	}
 
 	if (!mt76_testmode_enabled(phy))
 		goto out;
 
-	ret = mt76_mcu_send_msg(&dev->mt76, MCU_CMD_TEST_CTRL, &cmd,
+	ret = mt76_mcu_send_msg(&dev->mt76, MCU_CE_CMD(TEST_CTRL), &cmd,
 				sizeof(cmd), false);
 	if (ret)
 		goto out;
@@ -95,7 +94,7 @@ mt7921_tm_query(struct mt7921_dev *dev, struct mt7921_tm_cmd *req,
 	struct sk_buff *skb;
 	int ret;
 
-	ret = mt76_mcu_send_and_get_msg(&dev->mt76, MCU_CMD_TEST_CTRL,
+	ret = mt76_mcu_send_and_get_msg(&dev->mt76, MCU_CE_CMD(TEST_CTRL),
 					&cmd, sizeof(cmd), true, &skb);
 	if (ret)
 		goto out;

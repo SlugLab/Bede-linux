@@ -15,6 +15,46 @@
 #include "spectrum.h"
 #include "core_acl_flex_keys.h"
 
+static int mlxsw_sp_policer_validate(const struct flow_action *action,
+				     const struct flow_action_entry *act,
+				     struct netlink_ext_ack *extack)
+{
+	if (act->police.exceed.act_id != FLOW_ACTION_DROP) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Offload not supported when exceed action is not drop");
+		return -EOPNOTSUPP;
+	}
+
+	if (act->police.notexceed.act_id != FLOW_ACTION_PIPE &&
+	    act->police.notexceed.act_id != FLOW_ACTION_ACCEPT) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Offload not supported when conform action is not pipe or ok");
+		return -EOPNOTSUPP;
+	}
+
+	if (act->police.notexceed.act_id == FLOW_ACTION_ACCEPT &&
+	    !flow_action_is_last_entry(action, act)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Offload not supported when conform action is ok, but action is not last");
+		return -EOPNOTSUPP;
+	}
+
+	if (act->police.peakrate_bytes_ps ||
+	    act->police.avrate || act->police.overhead) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Offload not supported when peakrate/avrate/overhead is configured");
+		return -EOPNOTSUPP;
+	}
+
+	if (act->police.rate_pkt_ps) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "QoS offload not support packets per second");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
 static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 					 struct mlxsw_sp_flow_block *block,
 					 struct mlxsw_sp_acl_rule_info *rulei,
@@ -63,7 +103,7 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			}
 			ingress = mlxsw_sp_flow_block_is_ingress_bound(block);
 			err = mlxsw_sp_acl_rulei_act_drop(rulei, ingress,
-							  act->cookie, extack);
+							  act->user_cookie, extack);
 			if (err) {
 				NL_SET_ERR_MSG_MOD(extack, "Cannot append drop action");
 				return err;
@@ -191,10 +231,9 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 				return -EOPNOTSUPP;
 			}
 
-			if (act->police.rate_pkt_ps) {
-				NL_SET_ERR_MSG_MOD(extack, "QoS offload not support packets per second");
-				return -EOPNOTSUPP;
-			}
+			err = mlxsw_sp_policer_validate(flow_action, act, extack);
+			if (err)
+				return err;
 
 			/* The kernel might adjust the requested burst size so
 			 * that it is not exactly a power of two. Re-adjust it
@@ -203,7 +242,7 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			 */
 			burst = roundup_pow_of_two(act->police.burst);
 			err = mlxsw_sp_acl_rulei_act_police(mlxsw_sp, rulei,
-							    act->police.index,
+							    act->hw_index,
 							    act->police.rate_bytes_ps,
 							    burst, extack);
 			if (err)
@@ -233,6 +272,55 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			return -EOPNOTSUPP;
 		}
 	}
+
+	if (rulei->ipv6_valid) {
+		NL_SET_ERR_MSG_MOD(extack, "Unsupported mangle field");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int
+mlxsw_sp_flower_parse_meta_iif(struct mlxsw_sp_acl_rule_info *rulei,
+			       const struct mlxsw_sp_flow_block *block,
+			       const struct flow_match_meta *match,
+			       struct netlink_ext_ack *extack)
+{
+	struct mlxsw_sp_port *mlxsw_sp_port;
+	struct net_device *ingress_dev;
+
+	if (!match->mask->ingress_ifindex)
+		return 0;
+
+	if (match->mask->ingress_ifindex != 0xFFFFFFFF) {
+		NL_SET_ERR_MSG_MOD(extack, "Unsupported ingress ifindex mask");
+		return -EINVAL;
+	}
+
+	ingress_dev = __dev_get_by_index(block->net,
+					 match->key->ingress_ifindex);
+	if (!ingress_dev) {
+		NL_SET_ERR_MSG_MOD(extack, "Can't find specified ingress port to match on");
+		return -EINVAL;
+	}
+
+	if (!mlxsw_sp_port_dev_check(ingress_dev)) {
+		NL_SET_ERR_MSG_MOD(extack, "Can't match on non-mlxsw ingress port");
+		return -EINVAL;
+	}
+
+	mlxsw_sp_port = netdev_priv(ingress_dev);
+	if (mlxsw_sp_port->mlxsw_sp != block->mlxsw_sp) {
+		NL_SET_ERR_MSG_MOD(extack, "Can't match on a port from different device");
+		return -EINVAL;
+	}
+
+	mlxsw_sp_acl_rulei_keymask_u32(rulei,
+				       MLXSW_AFK_ELEMENT_SRC_SYS_PORT,
+				       mlxsw_sp_port->local_port,
+				       0xFFFFFFFF);
+
 	return 0;
 }
 
@@ -241,42 +329,18 @@ static int mlxsw_sp_flower_parse_meta(struct mlxsw_sp_acl_rule_info *rulei,
 				      struct mlxsw_sp_flow_block *block)
 {
 	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
-	struct mlxsw_sp_port *mlxsw_sp_port;
-	struct net_device *ingress_dev;
 	struct flow_match_meta match;
 
 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
 		return 0;
 
 	flow_rule_match_meta(rule, &match);
-	if (match.mask->ingress_ifindex != 0xFFFFFFFF) {
-		NL_SET_ERR_MSG_MOD(f->common.extack, "Unsupported ingress ifindex mask");
-		return -EINVAL;
-	}
 
-	ingress_dev = __dev_get_by_index(block->net,
-					 match.key->ingress_ifindex);
-	if (!ingress_dev) {
-		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't find specified ingress port to match on");
-		return -EINVAL;
-	}
+	mlxsw_sp_acl_rulei_keymask_u32(rulei, MLXSW_AFK_ELEMENT_FDB_MISS,
+				       match.key->l2_miss, match.mask->l2_miss);
 
-	if (!mlxsw_sp_port_dev_check(ingress_dev)) {
-		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't match on non-mlxsw ingress port");
-		return -EINVAL;
-	}
-
-	mlxsw_sp_port = netdev_priv(ingress_dev);
-	if (mlxsw_sp_port->mlxsw_sp != block->mlxsw_sp) {
-		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't match on a port from different device");
-		return -EINVAL;
-	}
-
-	mlxsw_sp_acl_rulei_keymask_u32(rulei,
-				       MLXSW_AFK_ELEMENT_SRC_SYS_PORT,
-				       mlxsw_sp_port->local_port,
-				       0xFFFFFFFF);
-	return 0;
+	return mlxsw_sp_flower_parse_meta_iif(rulei, block, &match,
+					      f->common.extack);
 }
 
 static void mlxsw_sp_flower_parse_ipv4(struct mlxsw_sp_acl_rule_info *rulei,
@@ -508,7 +572,8 @@ static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 		struct flow_match_vlan match;
 
 		flow_rule_match_vlan(rule, &match);
-		if (mlxsw_sp_flow_block_is_egress_bound(block)) {
+		if (mlxsw_sp_flow_block_is_egress_bound(block) &&
+		    match.mask->vlan_id) {
 			NL_SET_ERR_MSG_MOD(f->common.extack, "vlan_id key is not supported on egress");
 			return -EOPNOTSUPP;
 		}

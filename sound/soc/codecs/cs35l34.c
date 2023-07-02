@@ -787,7 +787,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs35l34 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static struct regmap_config cs35l34_regmap = {
@@ -800,7 +799,7 @@ static struct regmap_config cs35l34_regmap = {
 	.volatile_reg = cs35l34_volatile_register,
 	.readable_reg = cs35l34_readable_register,
 	.precious_reg = cs35l34_precious_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 
 	.use_single_read = true,
 	.use_single_write = true,
@@ -994,8 +993,7 @@ static const char * const cs35l34_core_supplies[] = {
 	"VP",
 };
 
-static int cs35l34_i2c_probe(struct i2c_client *i2c_client,
-			      const struct i2c_device_id *id)
+static int cs35l34_i2c_probe(struct i2c_client *i2c_client)
 {
 	struct cs35l34_private *cs35l34;
 	struct cs35l34_platform_data *pdata =
@@ -1130,7 +1128,7 @@ err_regulator:
 	return ret;
 }
 
-static int cs35l34_i2c_remove(struct i2c_client *client)
+static void cs35l34_i2c_remove(struct i2c_client *client)
 {
 	struct cs35l34_private *cs35l34 = i2c_get_clientdata(client);
 
@@ -1139,8 +1137,6 @@ static int cs35l34_i2c_remove(struct i2c_client *client)
 	pm_runtime_disable(&client->dev);
 	regulator_bulk_disable(cs35l34->num_core_supplies,
 		cs35l34->core_supplies);
-
-	return 0;
 }
 
 static int __maybe_unused cs35l34_runtime_resume(struct device *dev)

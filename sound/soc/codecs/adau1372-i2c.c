@@ -14,7 +14,7 @@
 
 #include "adau1372.h"
 
-static int adau1372_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int adau1372_i2c_probe(struct i2c_client *client)
 {
 	return adau1372_probe(&client->dev,
 		devm_regmap_init_i2c(client, &adau1372_regmap_config), NULL);

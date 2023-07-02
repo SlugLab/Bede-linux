@@ -13,10 +13,9 @@
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/sched.h>
-#include <linux/inet.h>
-#include <linux/idr.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
+#include <linux/fscache.h>
 #include <net/9p/9p.h>
 #include <net/9p/client.h>
 
@@ -108,7 +107,7 @@ static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 			struct iov_iter to;
 			int n;
 
-			iov_iter_kvec(&to, READ, &kvec, 1, buflen);
+			iov_iter_kvec(&to, ITER_DEST, &kvec, 1, buflen);
 			n = p9_client_read(file->private_data, ctx->pos, &to,
 					   &err);
 			if (err)
@@ -197,26 +196,43 @@ static int v9fs_dir_readdir_dotl(struct file *file, struct dir_context *ctx)
 
 
 /**
- * v9fs_dir_release - close a directory
- * @inode: inode of the directory
- * @filp: file pointer to a directory
+ * v9fs_dir_release - close a directory or a file
+ * @inode: inode of the directory or file
+ * @filp: file pointer to a directory or file
  *
  */
 
 int v9fs_dir_release(struct inode *inode, struct file *filp)
 {
+	struct v9fs_inode *v9inode = V9FS_I(inode);
 	struct p9_fid *fid;
+	__le32 version;
+	loff_t i_size;
+	int retval = 0;
 
 	fid = filp->private_data;
 	p9_debug(P9_DEBUG_VFS, "inode: %p filp: %p fid: %d\n",
 		 inode, filp, fid ? fid->fid : -1);
+
 	if (fid) {
+		if ((S_ISREG(inode->i_mode)) && (filp->f_mode & FMODE_WRITE))
+			retval = filemap_fdatawrite(inode->i_mapping);
+
 		spin_lock(&inode->i_lock);
 		hlist_del(&fid->ilist);
 		spin_unlock(&inode->i_lock);
-		p9_client_clunk(fid);
+		retval = p9_fid_put(fid);
 	}
-	return 0;
+
+	if ((filp->f_mode & FMODE_WRITE)) {
+		version = cpu_to_le32(v9inode->qid.version);
+		i_size = i_size_read(inode);
+		fscache_unuse_cookie(v9fs_inode_cookie(v9inode),
+				     &version, &i_size);
+	} else {
+		fscache_unuse_cookie(v9fs_inode_cookie(v9inode), NULL, NULL);
+	}
+	return retval;
 }
 
 const struct file_operations v9fs_dir_operations = {

@@ -36,7 +36,7 @@
 
 #define IBMVSCSIS_VERSION	"v0.2"
 
-#define	INITIAL_SRP_LIMIT	800
+#define	INITIAL_SRP_LIMIT	1024
 #define	DEFAULT_MAX_SECTORS	256
 #define MAX_TXU			1024 * 1024
 
@@ -444,7 +444,7 @@ static void ibmvscsis_disconnect(struct work_struct *work)
 		break;
 
 	/*
-	 * Can transition from this state to to unconfiguring
+	 * Can transition from this state to unconfiguring
 	 * or err disconnect.
 	 */
 	case ERR_DISCONNECT_RECONNECT:
@@ -1872,11 +1872,8 @@ static void srp_snd_msg_failed(struct scsi_info *vscsi, long rc)
  */
 static void ibmvscsis_send_messages(struct scsi_info *vscsi)
 {
-	u64 msg_hi = 0;
-	/* note do not attempt to access the IU_data_ptr with this pointer
-	 * it is not valid
-	 */
-	struct viosrp_crq *crq = (struct viosrp_crq *)&msg_hi;
+	struct viosrp_crq empty_crq = { };
+	struct viosrp_crq *crq = &empty_crq;
 	struct ibmvscsis_cmd *cmd, *nxt;
 	long rc = ADAPT_SUCCESS;
 	bool retry = false;
@@ -1940,7 +1937,7 @@ static void ibmvscsis_send_messages(struct scsi_info *vscsi)
 					crq->IU_length = cpu_to_be16(cmd->rsp.len);
 
 					rc = h_send_crq(vscsi->dma_dev->unit_address,
-							be64_to_cpu(msg_hi),
+							be64_to_cpu(crq->high),
 							be64_to_cpu(cmd->rsp.tag));
 
 					dev_dbg(&vscsi->dev, "send_messages: cmd %p, tag 0x%llx, rc %ld\n",
@@ -3701,16 +3698,6 @@ static int ibmvscsis_check_true(struct se_portal_group *se_tpg)
 	return 1;
 }
 
-static int ibmvscsis_check_false(struct se_portal_group *se_tpg)
-{
-	return 0;
-}
-
-static u32 ibmvscsis_tpg_get_inst_index(struct se_portal_group *se_tpg)
-{
-	return 1;
-}
-
 static int ibmvscsis_check_stop_free(struct se_cmd *se_cmd)
 {
 	return target_put_sess_cmd(se_cmd);
@@ -3727,11 +3714,6 @@ static void ibmvscsis_release_cmd(struct se_cmd *se_cmd)
 	list_move_tail(&cmd->list, &vscsi->waiting_rsp);
 	ibmvscsis_send_messages(vscsi);
 	spin_unlock_bh(&vscsi->intr_lock);
-}
-
-static u32 ibmvscsis_sess_get_index(struct se_session *se_sess)
-{
-	return 0;
 }
 
 static int ibmvscsis_write_pending(struct se_cmd *se_cmd)
@@ -3765,15 +3747,6 @@ static int ibmvscsis_write_pending(struct se_cmd *se_cmd)
 	 * object execution queue.
 	 */
 	target_execute_cmd(se_cmd);
-	return 0;
-}
-
-static void ibmvscsis_set_default_node_attrs(struct se_node_acl *nacl)
-{
-}
-
-static int ibmvscsis_get_cmd_state(struct se_cmd *se_cmd)
-{
 	return 0;
 }
 
@@ -3985,15 +3958,9 @@ static const struct target_core_fabric_ops ibmvscsis_ops = {
 	.tpg_get_default_depth		= ibmvscsis_get_default_depth,
 	.tpg_check_demo_mode		= ibmvscsis_check_true,
 	.tpg_check_demo_mode_cache	= ibmvscsis_check_true,
-	.tpg_check_demo_mode_write_protect = ibmvscsis_check_false,
-	.tpg_check_prod_mode_write_protect = ibmvscsis_check_false,
-	.tpg_get_inst_index		= ibmvscsis_tpg_get_inst_index,
 	.check_stop_free		= ibmvscsis_check_stop_free,
 	.release_cmd			= ibmvscsis_release_cmd,
-	.sess_get_index			= ibmvscsis_sess_get_index,
 	.write_pending			= ibmvscsis_write_pending,
-	.set_default_node_attributes	= ibmvscsis_set_default_node_attrs,
-	.get_cmd_state			= ibmvscsis_get_cmd_state,
 	.queue_data_in			= ibmvscsis_queue_data_in,
 	.queue_status			= ibmvscsis_queue_status,
 	.queue_tm_rsp			= ibmvscsis_queue_tm_rsp,

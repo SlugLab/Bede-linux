@@ -946,7 +946,6 @@ static const struct snd_soc_component_driver soc_component_dev_rt1305 = {
 	.set_pll = rt1305_set_component_pll,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config rt1305_regmap = {
@@ -956,7 +955,7 @@ static const struct regmap_config rt1305_regmap = {
 					       RT1305_PR_SPACING),
 	.volatile_reg = rt1305_volatile_register,
 	.readable_reg = rt1305_readable_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.reg_defaults = rt1305_reg,
 	.num_reg_defaults = ARRAY_SIZE(rt1305_reg),
 	.ranges = rt1305_ranges,
@@ -1117,8 +1116,7 @@ static void rt1305_calibrate(struct rt1305_priv *rt1305)
 	regcache_cache_bypass(rt1305->regmap, false);
 }
 
-static int rt1305_i2c_probe(struct i2c_client *i2c,
-		    const struct i2c_device_id *id)
+static int rt1305_i2c_probe(struct i2c_client *i2c)
 {
 	struct rt1305_priv *rt1305;
 	int ret;

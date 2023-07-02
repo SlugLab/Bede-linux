@@ -128,8 +128,8 @@ uppercase letter and should be written in imperative tone.
 Changelog
 ^^^^^^^^^
 
-The general rules about changelogs in the process documentation, see
-:ref:`Documentation/process/ <submittingpatches>`, apply.
+The general rules about changelogs in the :ref:`Submitting patches guide
+<describe_changes>`, apply.
 
 The tip tree maintainers set value on following these rules, especially on
 the request to write changelogs in imperative mood and not impersonating
@@ -421,6 +421,9 @@ allowing themselves a breath. Please respect that.
 The release candidate -rc1 is the starting point for new patches to be
 applied which are targeted for the next merge window.
 
+So called _urgent_ branches will be merged into mainline during the
+stabilization phase of each release.
+
 
 Git
 ^^^
@@ -437,6 +440,20 @@ in a private repository which allows interested people to easily pull the
 series for testing. The usual way to offer this is a git URL in the cover
 letter of the patch series.
 
+Testing
+^^^^^^^
+
+Code should be tested before submitting to the tip maintainers.  Anything
+other than minor changes should be built, booted and tested with
+comprehensive (and heavyweight) kernel debugging options enabled.
+
+These debugging options can be found in kernel/configs/x86_debug.config
+and can be added to an existing kernel config by running:
+
+	make x86_debug.config
+
+Some of these options are x86-specific and can be left out when testing
+on other architectures.
 
 Coding style notes
 ------------------

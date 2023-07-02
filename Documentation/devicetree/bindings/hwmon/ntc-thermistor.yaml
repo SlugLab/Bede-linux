@@ -6,7 +6,6 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: NTC thermistor temperature sensors
 
 maintainers:
-  - Naveen Krishna Chatradhi <ch.naveen@samsung.com>
   - Linus Walleij <linus.walleij@linaro.org>
 
 description: |
@@ -76,6 +75,7 @@ properties:
       - const: murata,ncp15wl333
       - const: murata,ncp03wf104
       - const: murata,ncp15xh103
+      - const: samsung,1404-001221
       # Deprecated "ntp," compatible strings
       - const: ntc,ncp15wb473
         deprecated: true
@@ -131,7 +131,7 @@ additionalProperties: false
 
 examples:
   - |
-    thermistor0 {
+    thermistor {
       compatible = "murata,ncp18wb473";
       io-channels = <&gpadc 0x06>;
       pullup-uv = <1800000>;

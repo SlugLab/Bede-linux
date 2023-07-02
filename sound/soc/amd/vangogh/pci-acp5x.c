@@ -92,12 +92,14 @@ static int acp5x_init(void __iomem *acp5x_base)
 		pr_err("ACP5x power on failed\n");
 		return ret;
 	}
+	acp_writel(0x01, acp5x_base + ACP_CONTROL);
 	/* Reset */
 	ret = acp5x_reset(acp5x_base);
 	if (ret) {
 		pr_err("ACP5x reset failed\n");
 		return ret;
 	}
+	acp_writel(0x03, acp5x_base + ACP_CLKMUX_SEL);
 	acp5x_enable_interrupts(acp5x_base);
 	return 0;
 }
@@ -113,6 +115,8 @@ static int acp5x_deinit(void __iomem *acp5x_base)
 		pr_err("ACP5x reset failed\n");
 		return ret;
 	}
+	acp_writel(0x00, acp5x_base + ACP_CLKMUX_SEL);
+	acp_writel(0x00, acp5x_base + ACP_CONTROL);
 	return 0;
 }
 
@@ -121,9 +125,14 @@ static int snd_acp5x_probe(struct pci_dev *pci,
 {
 	struct acp5x_dev_data *adata;
 	struct platform_device_info pdevinfo[ACP5x_DEVS];
-	unsigned int irqflags;
+	unsigned int irqflags, flag;
 	int ret, i;
 	u32 addr, val;
+
+	/* Return if acp config flag is defined */
+	flag = snd_amd_acp_find_config(pci);
+	if (flag)
+		return -ENODEV;
 
 	irqflags = IRQF_SHARED;
 	if (pci->revision != 0x50)

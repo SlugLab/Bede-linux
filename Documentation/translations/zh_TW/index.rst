@@ -5,7 +5,7 @@
 	\renewcommand\thesection*
 	\renewcommand\thesubsection*
 	\kerneldocCJKon
-	\kerneldocBeginTC
+	\kerneldocBeginTC{
 
 .. _linux_doc_zh_tw:
 
@@ -128,7 +128,7 @@ TODOList:
 * security/index
 * sound/index
 * crypto/index
-* vm/index
+* mm/index
 * bpf/index
 * usb/index
 * PCI/index
@@ -150,7 +150,7 @@ TODOList:
 .. toctree::
    :maxdepth: 2
 
-   arm64/index
+   arch/arm64/index
 
 TODOList:
 
@@ -174,4 +174,4 @@ TODOList:
 
 .. raw:: latex
 
-	\kerneldocEndTC
+	}\kerneldocEndTC

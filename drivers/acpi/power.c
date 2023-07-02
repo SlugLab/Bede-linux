@@ -23,6 +23,7 @@
 
 #define pr_fmt(fmt) "ACPI: PM: " fmt
 
+#include <linux/dmi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -81,9 +82,9 @@ struct acpi_power_resource *to_power_resource(struct acpi_device *device)
 
 static struct acpi_power_resource *acpi_power_get_context(acpi_handle handle)
 {
-	struct acpi_device *device;
+	struct acpi_device *device = acpi_fetch_acpi_dev(handle);
 
-	if (acpi_bus_get_device(handle, &device))
+	if (!device)
 		return NULL;
 
 	return to_power_resource(device);
@@ -716,6 +717,9 @@ int acpi_enable_wakeup_device_power(struct acpi_device *dev, int sleep_state)
 
 	mutex_lock(&acpi_device_lock);
 
+	dev_dbg(&dev->dev, "Enabling wakeup power (count %d)\n",
+		dev->wakeup.prepare_count);
+
 	if (dev->wakeup.prepare_count++)
 		goto out;
 
@@ -734,7 +738,10 @@ int acpi_enable_wakeup_device_power(struct acpi_device *dev, int sleep_state)
 	if (err) {
 		acpi_power_off_list(&dev->wakeup.resources);
 		dev->wakeup.prepare_count = 0;
+		goto out;
 	}
+
+	dev_dbg(&dev->dev, "Wakeup power enabled\n");
 
  out:
 	mutex_unlock(&acpi_device_lock);
@@ -756,6 +763,9 @@ int acpi_disable_wakeup_device_power(struct acpi_device *dev)
 		return -EINVAL;
 
 	mutex_lock(&acpi_device_lock);
+
+	dev_dbg(&dev->dev, "Disabling wakeup power (count %d)\n",
+		dev->wakeup.prepare_count);
 
 	/* Do nothing if wakeup power has not been enabled for this device. */
 	if (dev->wakeup.prepare_count <= 0)
@@ -782,7 +792,10 @@ int acpi_disable_wakeup_device_power(struct acpi_device *dev)
 	if (err) {
 		dev_err(&dev->dev, "Cannot turn off wakeup power resources\n");
 		dev->wakeup.flags.valid = 0;
+		goto out;
 	}
+
+	dev_dbg(&dev->dev, "Wakeup power disabled\n");
 
  out:
 	mutex_unlock(&acpi_device_lock);
@@ -916,15 +929,14 @@ static void acpi_power_add_resource_to_list(struct acpi_power_resource *resource
 
 struct acpi_device *acpi_add_power_resource(acpi_handle handle)
 {
+	struct acpi_device *device = acpi_fetch_acpi_dev(handle);
 	struct acpi_power_resource *resource;
-	struct acpi_device *device = NULL;
 	union acpi_object acpi_object;
 	struct acpi_buffer buffer = { sizeof(acpi_object), &acpi_object };
 	acpi_status status;
 	u8 state_dummy;
 	int result;
 
-	acpi_bus_get_device(handle, &device);
 	if (device)
 		return device;
 
@@ -933,13 +945,15 @@ struct acpi_device *acpi_add_power_resource(acpi_handle handle)
 		return NULL;
 
 	device = &resource->device;
-	acpi_init_device_object(device, handle, ACPI_BUS_TYPE_POWER);
+	acpi_init_device_object(device, handle, ACPI_BUS_TYPE_POWER,
+				acpi_release_power_resource);
 	mutex_init(&resource->resource_lock);
 	INIT_LIST_HEAD(&resource->list_node);
 	INIT_LIST_HEAD(&resource->dependents);
 	strcpy(acpi_device_name(device), ACPI_POWER_DEVICE_NAME);
 	strcpy(acpi_device_class(device), ACPI_POWER_CLASS);
 	device->power.state = ACPI_STATE_UNKNOWN;
+	device->flags.match_driver = true;
 
 	/* Evaluate the object to get the system level and resource order. */
 	status = acpi_evaluate_object(handle, NULL, NULL, &buffer);
@@ -954,10 +968,13 @@ struct acpi_device *acpi_add_power_resource(acpi_handle handle)
 	if (acpi_power_get_state(resource, &state_dummy))
 		__acpi_power_on(resource);
 
-	pr_info("%s [%s]\n", acpi_device_name(device), acpi_device_bid(device));
+	acpi_handle_info(handle, "New power resource\n");
 
-	device->flags.match_driver = true;
-	result = acpi_device_add(device, acpi_release_power_resource);
+	result = acpi_tie_acpi_dev(device);
+	if (result)
+		goto err;
+
+	result = acpi_device_add(device);
 	if (result)
 		goto err;
 
@@ -1006,12 +1023,30 @@ void acpi_resume_power_resources(void)
 }
 #endif
 
+static const struct dmi_system_id dmi_leave_unused_power_resources_on[] = {
+	{
+		/*
+		 * The Toshiba Click Mini has a CPR3 power-resource which must
+		 * be on for the touchscreen to work, but which is not in any
+		 * _PR? lists. The other 2 affected power-resources are no-ops.
+		 */
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "SATELLITE Click Mini L9W-B"),
+		},
+	},
+	{}
+};
+
 /**
  * acpi_turn_off_unused_power_resources - Turn off power resources not in use.
  */
 void acpi_turn_off_unused_power_resources(void)
 {
 	struct acpi_power_resource *resource;
+
+	if (dmi_check_system(dmi_leave_unused_power_resources_on))
+		return;
 
 	mutex_lock(&power_resource_list_lock);
 

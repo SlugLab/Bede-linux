@@ -280,9 +280,6 @@ extern void kvmppc_copy_to_svcpu(struct kvm_vcpu *vcpu);
 extern void kvmppc_copy_from_svcpu(struct kvm_vcpu *vcpu);
 
 long kvmppc_read_intr(void);
-void kvmppc_bad_interrupt(struct pt_regs *regs);
-void kvmhv_p9_set_lpcr(struct kvm_split_mode *sip);
-void kvmhv_p9_restore_lpcr(struct kvm_split_mode *sip);
 void kvmppc_set_msr_hv(struct kvm_vcpu *vcpu, u64 msr);
 void kvmppc_inject_interrupt_hv(struct kvm_vcpu *vcpu, int vec, u64 srr1_flags);
 
@@ -404,6 +401,12 @@ static inline bool kvmppc_need_byteswap(struct kvm_vcpu *vcpu)
 static inline ulong kvmppc_get_fault_dar(struct kvm_vcpu *vcpu)
 {
 	return vcpu->arch.fault_dar;
+}
+
+/* Expiry time of vcpu DEC relative to host TB */
+static inline u64 kvmppc_dec_expires_host_tb(struct kvm_vcpu *vcpu)
+{
+	return vcpu->arch.dec_expires - vcpu->arch.vcore->tb_offset;
 }
 
 static inline bool is_kvmppc_resume_guest(int r)

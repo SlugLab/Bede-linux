@@ -26,7 +26,7 @@
 #ifndef __DAL_DPCD_DEFS_H__
 #define __DAL_DPCD_DEFS_H__
 
-#include <drm/drm_dp_helper.h>
+#include <drm/display/drm_dp_helper.h>
 #ifndef DP_SINK_HW_REVISION_START // can remove this once the define gets into linux drm_dp_helper.h
 #define DP_SINK_HW_REVISION_START 0x409
 #endif
@@ -88,7 +88,10 @@ enum dpcd_phy_test_patterns {
 	PHY_TEST_PATTERN_PRBS23 = 0x30,
 	PHY_TEST_PATTERN_PRBS31 = 0x38,
 	PHY_TEST_PATTERN_264BIT_CUSTOM = 0x40,
-	PHY_TEST_PATTERN_SQUARE_PULSE = 0x48,
+	PHY_TEST_PATTERN_SQUARE = 0x48,
+	PHY_TEST_PATTERN_SQUARE_PRESHOOT_DISABLED = 0x49,
+	PHY_TEST_PATTERN_SQUARE_DEEMPHASIS_DISABLED = 0x4A,
+	PHY_TEST_PATTERN_SQUARE_PRESHOOT_DEEMPHASIS_DISABLED = 0x4B,
 };
 
 enum dpcd_test_dyn_range {
@@ -144,14 +147,10 @@ enum dpcd_training_patterns {
 	DPCD_TRAINING_PATTERN_1,
 	DPCD_TRAINING_PATTERN_2,
 	DPCD_TRAINING_PATTERN_3,
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	DPCD_TRAINING_PATTERN_4 = 7,
 	DPCD_128b_132b_TPS1 = 1,
 	DPCD_128b_132b_TPS2 = 2,
 	DPCD_128b_132b_TPS2_CDS = 3,
-#else
-	DPCD_TRAINING_PATTERN_4 = 7
-#endif
 };
 
 /* This enum is for use with PsrSinkPsrStatus.bits.sinkSelfRefreshStatus

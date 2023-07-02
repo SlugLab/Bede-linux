@@ -287,6 +287,18 @@ static inline int bcm_qspi_spbr_min(struct bcm_qspi *qspi)
 		return 8;
 }
 
+static u32 bcm_qspi_calc_spbr(u32 clk_speed_hz,
+			      const struct bcm_qspi_parms *xp)
+{
+	u32 spbr = 0;
+
+	/* SPBR = System Clock/(2 * SCK Baud Rate) */
+	if (xp->speed_hz)
+		spbr = clk_speed_hz / (xp->speed_hz * 2);
+
+	return spbr;
+}
+
 /* Read qspi controller register*/
 static inline u32 bcm_qspi_read(struct bcm_qspi *qspi, enum base_type type,
 				unsigned int offset)
@@ -573,7 +585,7 @@ static void bcm_qspi_chip_select(struct bcm_qspi *qspi, int cs)
 	u32 rd = 0;
 	u32 wr = 0;
 
-	if (qspi->base[CHIP_SELECT]) {
+	if (cs >= 0 && qspi->base[CHIP_SELECT]) {
 		rd = bcm_qspi_read(qspi, CHIP_SELECT, 0);
 		wr = (rd & ~0xff) | (1 << cs);
 		if (rd == wr)
@@ -586,11 +598,23 @@ static void bcm_qspi_chip_select(struct bcm_qspi *qspi, int cs)
 	qspi->curr_cs = cs;
 }
 
+static bool bcmspi_parms_did_change(const struct bcm_qspi_parms * const cur,
+				    const struct bcm_qspi_parms * const prev)
+{
+	return (cur->speed_hz != prev->speed_hz) ||
+		(cur->mode != prev->mode) ||
+		(cur->bits_per_word != prev->bits_per_word);
+}
+
+
 /* MSPI helpers */
 static void bcm_qspi_hw_set_parms(struct bcm_qspi *qspi,
 				  const struct bcm_qspi_parms *xp)
 {
 	u32 spcr, spbr = 0;
+
+	if (!bcmspi_parms_did_change(xp, &qspi->last_parms))
+		return;
 
 	if (!qspi->mspi_maj_rev)
 		/* legacy controller */
@@ -621,9 +645,17 @@ static void bcm_qspi_hw_set_parms(struct bcm_qspi *qspi,
 			spcr |= MSPI_SPCR3_HALFDUPLEX |  MSPI_SPCR3_HDOUTTYPE;
 
 		if (bcm_qspi_has_sysclk_108(qspi)) {
-			/* SYSCLK_108 */
-			spcr |= MSPI_SPCR3_SYSCLKSEL_108;
-			qspi->base_clk = MSPI_BASE_FREQ * 4;
+			/* check requested baud rate before moving to 108Mhz */
+			spbr = bcm_qspi_calc_spbr(MSPI_BASE_FREQ * 4, xp);
+			if (spbr > QSPI_SPBR_MAX) {
+				/* use SYSCLK_27Mhz for slower baud rates */
+				spcr &= ~MSPI_SPCR3_SYSCLKSEL_MASK;
+				qspi->base_clk = MSPI_BASE_FREQ;
+			} else {
+				/* SYSCLK_108Mhz */
+				spcr |= MSPI_SPCR3_SYSCLKSEL_108;
+				qspi->base_clk = MSPI_BASE_FREQ * 4;
+			}
 		}
 
 		if (xp->bits_per_word > 16) {
@@ -649,9 +681,9 @@ static void bcm_qspi_hw_set_parms(struct bcm_qspi *qspi,
 		bcm_qspi_write(qspi, MSPI, MSPI_SPCR3, spcr);
 	}
 
-	if (xp->speed_hz)
-		spbr = qspi->base_clk / (2 * xp->speed_hz);
-
+	/* SCK Baud Rate = System Clock/(2 * SPBR) */
+	qspi->max_speed_hz = qspi->base_clk / (bcm_qspi_spbr_min(qspi) * 2);
+	spbr = bcm_qspi_calc_spbr(qspi->base_clk, xp);
 	spbr = clamp_val(spbr, bcm_qspi_spbr_min(qspi), QSPI_SPBR_MAX);
 	bcm_qspi_write(qspi, MSPI, MSPI_SPCR0_LSB, spbr);
 
@@ -954,7 +986,7 @@ static int write_to_hw(struct bcm_qspi *qspi, struct spi_device *spi)
 		if (has_bspi(qspi))
 			mspi_cdram &= ~1;
 		else
-			mspi_cdram |= (~(1 << spi->chip_select) &
+			mspi_cdram |= (~(1 << spi_get_chipselect(spi, 0)) &
 				       MSPI_CDRAM_PCS);
 
 		write_cdram_slot(qspi, slot, mspi_cdram);
@@ -1014,8 +1046,8 @@ static int bcm_qspi_bspi_exec_mem_op(struct spi_device *spi,
 			return -EIO;
 
 	from = op->addr.val;
-	if (!spi->cs_gpiod)
-		bcm_qspi_chip_select(qspi, spi->chip_select);
+	if (!spi_get_csgpiod(spi, 0))
+		bcm_qspi_chip_select(qspi, spi_get_chipselect(spi, 0));
 	bcm_qspi_write(qspi, MSPI, MSPI_WRITE_LOCK, 0);
 
 	/*
@@ -1094,8 +1126,8 @@ static int bcm_qspi_transfer_one(struct spi_master *master,
 	int slots;
 	unsigned long timeo = msecs_to_jiffies(100);
 
-	if (!spi->cs_gpiod)
-		bcm_qspi_chip_select(qspi, spi->chip_select);
+	if (!spi_get_csgpiod(spi, 0))
+		bcm_qspi_chip_select(qspi, spi_get_chipselect(spi, 0));
 	qspi->trans_pos.trans = trans;
 	qspi->trans_pos.byte = 0;
 
@@ -1173,7 +1205,7 @@ static int bcm_qspi_exec_mem_op(struct spi_mem *mem,
 	addr = op->addr.val;
 	len = op->data.nbytes;
 
-	if (bcm_qspi_bspi_ver_three(qspi) == true) {
+	if (has_bspi(qspi) && bcm_qspi_bspi_ver_three(qspi) == true) {
 		/*
 		 * The address coming into this function is a raw flash offset.
 		 * But for BSPI <= V3, we need to convert it to a remapped BSPI
@@ -1192,7 +1224,7 @@ static int bcm_qspi_exec_mem_op(struct spi_mem *mem,
 	    len < 4)
 		mspi_read = true;
 
-	if (mspi_read)
+	if (!has_bspi(qspi) || mspi_read)
 		return bcm_qspi_mspi_exec_mem_op(spi, op);
 
 	ret = bcm_qspi_bspi_set_mode(qspi, op, 0);
@@ -1425,7 +1457,7 @@ static const struct bcm_qspi_data bcm_qspi_spcr3_data = {
 	.has_spcr3_sysclk = true,
 };
 
-static const struct of_device_id bcm_qspi_of_match[] = {
+static const struct of_device_id bcm_qspi_of_match[] __maybe_unused = {
 	{
 		.compatible = "brcm,spi-bcm7445-qspi",
 		.data = &bcm_qspi_rev_data,
@@ -1650,7 +1682,7 @@ qspi_probe_err:
 /* probe function to be called by SoC specific platform driver probe */
 EXPORT_SYMBOL_GPL(bcm_qspi_probe);
 
-int bcm_qspi_remove(struct platform_device *pdev)
+void bcm_qspi_remove(struct platform_device *pdev)
 {
 	struct bcm_qspi *qspi = platform_get_drvdata(pdev);
 
@@ -1658,9 +1690,8 @@ int bcm_qspi_remove(struct platform_device *pdev)
 	bcm_qspi_hw_uninit(qspi);
 	clk_disable_unprepare(qspi->clk);
 	kfree(qspi->dev_ids);
-
-	return 0;
 }
+
 /* function to be called by SoC specific platform driver remove() */
 EXPORT_SYMBOL_GPL(bcm_qspi_remove);
 

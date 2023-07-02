@@ -261,7 +261,6 @@ static int u2fzero_init_hwrng(struct u2fzero_device *dev,
 
 	dev->hwrng.name = dev->rng_name;
 	dev->hwrng.read = u2fzero_rng_read;
-	dev->hwrng.quality = 1;
 
 	return devm_hwrng_register(&dev->hdev->dev, &dev->hwrng);
 }
@@ -311,7 +310,7 @@ static int u2fzero_probe(struct hid_device *hdev,
 	unsigned int minor;
 	int ret;
 
-	if (!hid_is_using_ll_driver(hdev, &usb_hid_driver))
+	if (!hid_is_usb(hdev))
 		return -EINVAL;
 
 	dev = devm_kzalloc(&hdev->dev, sizeof(*dev), GFP_KERNEL);

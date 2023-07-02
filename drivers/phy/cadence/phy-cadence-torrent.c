@@ -331,7 +331,6 @@ struct cdns_torrent_phy {
 	struct cdns_torrent_inst phys[MAX_NUM_LANES];
 	int nsubnodes;
 	const struct cdns_torrent_data *init_data;
-	struct regmap *regmap;
 	struct regmap *regmap_common_cdb;
 	struct regmap *regmap_phy_pcs_common_cdb;
 	struct regmap *regmap_phy_pma_common_cdb;
@@ -1862,6 +1861,7 @@ static const struct clk_ops cdns_torrent_refclk_driver_ops = {
 	.enable = cdns_torrent_refclk_driver_enable,
 	.disable = cdns_torrent_refclk_driver_disable,
 	.is_enabled = cdns_torrent_refclk_driver_is_enabled,
+	.determine_rate = __clk_mux_determine_rate,
 	.set_parent = cdns_torrent_refclk_driver_set_parent,
 	.get_parent = cdns_torrent_refclk_driver_get_parent,
 };
@@ -2278,7 +2278,7 @@ int cdns_torrent_phy_configure_multilink(struct cdns_torrent_phy *cdns_phy)
 	struct cdns_torrent_vals *cmn_vals, *tx_ln_vals, *rx_ln_vals;
 	enum cdns_torrent_ref_clk ref_clk = cdns_phy->ref_clk_rate;
 	struct cdns_torrent_vals *link_cmn_vals, *xcvr_diag_vals;
-	enum cdns_torrent_phy_type phy_t1, phy_t2, tmp_phy_type;
+	enum cdns_torrent_phy_type phy_t1, phy_t2;
 	struct cdns_torrent_vals *pcs_cmn_vals;
 	int i, j, node, mlane, num_lanes, ret;
 	struct cdns_reg_pairs *reg_pairs;
@@ -2304,9 +2304,7 @@ int cdns_torrent_phy_configure_multilink(struct cdns_torrent_phy *cdns_phy)
 			 * configure the PHY for second link with phy_t2.
 			 * Get the array values as [phy_t2][phy_t1][ssc].
 			 */
-			tmp_phy_type = phy_t1;
-			phy_t1 = phy_t2;
-			phy_t2 = tmp_phy_type;
+			swap(phy_t1, phy_t2);
 		}
 
 		mlane = cdns_phy->phys[node].mlane;
@@ -2780,7 +2778,7 @@ clk_cleanup:
 	return ret;
 }
 
-static int cdns_torrent_phy_remove(struct platform_device *pdev)
+static void cdns_torrent_phy_remove(struct platform_device *pdev)
 {
 	struct cdns_torrent_phy *cdns_phy = platform_get_drvdata(pdev);
 	int i;
@@ -2794,8 +2792,6 @@ static int cdns_torrent_phy_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(cdns_phy->clk);
 	cdns_torrent_clk_cleanup(cdns_phy);
-
-	return 0;
 }
 
 /* Single DisplayPort(DP) link configuration */
@@ -4711,7 +4707,7 @@ MODULE_DEVICE_TABLE(of, cdns_torrent_phy_of_match);
 
 static struct platform_driver cdns_torrent_phy_driver = {
 	.probe	= cdns_torrent_phy_probe,
-	.remove = cdns_torrent_phy_remove,
+	.remove_new = cdns_torrent_phy_remove,
 	.driver = {
 		.name	= "cdns-torrent-phy",
 		.of_match_table	= cdns_torrent_phy_of_match,

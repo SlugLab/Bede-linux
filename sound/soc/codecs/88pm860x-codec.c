@@ -1345,7 +1345,6 @@ static const struct snd_soc_component_driver soc_component_dev_pm860x = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static int pm860x_codec_probe(struct platform_device *pdev)
@@ -1387,17 +1386,11 @@ static int pm860x_codec_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int pm860x_codec_remove(struct platform_device *pdev)
-{
-	return 0;
-}
-
 static struct platform_driver pm860x_codec_driver = {
 	.driver	= {
 		.name	= "88pm860x-codec",
 	},
 	.probe	= pm860x_codec_probe,
-	.remove	= pm860x_codec_remove,
 };
 
 module_platform_driver(pm860x_codec_driver);

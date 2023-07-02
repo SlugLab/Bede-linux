@@ -159,7 +159,6 @@ struct fxls8962af_chip_info {
 struct fxls8962af_data {
 	struct regmap *regmap;
 	const struct fxls8962af_chip_info *chip_info;
-	struct regulator *vdd_reg;
 	struct {
 		__le16 channels[3];
 		s64 ts __aligned(8);
@@ -173,12 +172,20 @@ struct fxls8962af_data {
 	u16 upper_thres;
 };
 
-const struct regmap_config fxls8962af_regmap_conf = {
+const struct regmap_config fxls8962af_i2c_regmap_conf = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = FXLS8962AF_MAX_REG,
 };
-EXPORT_SYMBOL_GPL(fxls8962af_regmap_conf);
+EXPORT_SYMBOL_NS_GPL(fxls8962af_i2c_regmap_conf, IIO_FXLS8962AF);
+
+const struct regmap_config fxls8962af_spi_regmap_conf = {
+	.reg_bits = 8,
+	.pad_bits = 8,
+	.val_bits = 8,
+	.max_register = FXLS8962AF_MAX_REG,
+};
+EXPORT_SYMBOL_NS_GPL(fxls8962af_spi_regmap_conf, IIO_FXLS8962AF);
 
 enum {
 	fxls8962af_idx_x,
@@ -1043,13 +1050,6 @@ static irqreturn_t fxls8962af_interrupt(int irq, void *p)
 	return IRQ_NONE;
 }
 
-static void fxls8962af_regulator_disable(void *data_ptr)
-{
-	struct fxls8962af_data *data = data_ptr;
-
-	regulator_disable(data->vdd_reg);
-}
-
 static void fxls8962af_pm_disable(void *dev_ptr)
 {
 	struct device *dev = dev_ptr;
@@ -1163,20 +1163,10 @@ int fxls8962af_core_probe(struct device *dev, struct regmap *regmap, int irq)
 	if (ret)
 		return ret;
 
-	data->vdd_reg = devm_regulator_get(dev, "vdd");
-	if (IS_ERR(data->vdd_reg))
-		return dev_err_probe(dev, PTR_ERR(data->vdd_reg),
-				     "Failed to get vdd regulator\n");
-
-	ret = regulator_enable(data->vdd_reg);
-	if (ret) {
-		dev_err(dev, "Failed to enable vdd regulator: %d\n", ret);
-		return ret;
-	}
-
-	ret = devm_add_action_or_reset(dev, fxls8962af_regulator_disable, data);
+	ret = devm_regulator_get_enable(dev, "vdd");
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret,
+				     "Failed to get vdd regulator\n");
 
 	ret = regmap_read(data->regmap, FXLS8962AF_WHO_AM_I, &reg);
 	if (ret)
@@ -1209,7 +1199,6 @@ int fxls8962af_core_probe(struct device *dev, struct regmap *regmap, int irq)
 			return ret;
 
 		ret = devm_iio_kfifo_buffer_setup(dev, indio_dev,
-						  INDIO_BUFFER_SOFTWARE,
 						  &fxls8962af_buffer_ops);
 		if (ret)
 			return ret;
@@ -1232,9 +1221,9 @@ int fxls8962af_core_probe(struct device *dev, struct regmap *regmap, int irq)
 
 	return devm_iio_device_register(dev, indio_dev);
 }
-EXPORT_SYMBOL_GPL(fxls8962af_core_probe);
+EXPORT_SYMBOL_NS_GPL(fxls8962af_core_probe, IIO_FXLS8962AF);
 
-static int __maybe_unused fxls8962af_runtime_suspend(struct device *dev)
+static int fxls8962af_runtime_suspend(struct device *dev)
 {
 	struct fxls8962af_data *data = iio_priv(dev_get_drvdata(dev));
 	int ret;
@@ -1248,14 +1237,14 @@ static int __maybe_unused fxls8962af_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused fxls8962af_runtime_resume(struct device *dev)
+static int fxls8962af_runtime_resume(struct device *dev)
 {
 	struct fxls8962af_data *data = iio_priv(dev_get_drvdata(dev));
 
 	return fxls8962af_active(data);
 }
 
-static int __maybe_unused fxls8962af_suspend(struct device *dev)
+static int fxls8962af_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct fxls8962af_data *data = iio_priv(indio_dev);
@@ -1276,7 +1265,7 @@ static int __maybe_unused fxls8962af_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused fxls8962af_resume(struct device *dev)
+static int fxls8962af_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct fxls8962af_data *data = iio_priv(indio_dev);
@@ -1293,12 +1282,10 @@ static int __maybe_unused fxls8962af_resume(struct device *dev)
 	return 0;
 }
 
-const struct dev_pm_ops fxls8962af_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(fxls8962af_suspend, fxls8962af_resume)
-	SET_RUNTIME_PM_OPS(fxls8962af_runtime_suspend,
-			   fxls8962af_runtime_resume, NULL)
+EXPORT_NS_GPL_DEV_PM_OPS(fxls8962af_pm_ops, IIO_FXLS8962AF) = {
+	SYSTEM_SLEEP_PM_OPS(fxls8962af_suspend, fxls8962af_resume)
+	RUNTIME_PM_OPS(fxls8962af_runtime_suspend, fxls8962af_runtime_resume, NULL)
 };
-EXPORT_SYMBOL_GPL(fxls8962af_pm_ops);
 
 MODULE_AUTHOR("Sean Nyekjaer <sean@geanix.com>");
 MODULE_DESCRIPTION("NXP FXLS8962AF/FXLS8964AF accelerometer driver");

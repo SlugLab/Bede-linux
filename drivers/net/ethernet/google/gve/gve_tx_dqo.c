@@ -8,6 +8,7 @@
 #include "gve_adminq.h"
 #include "gve_utils.h"
 #include "gve_dqo.h"
+#include <net/ip.h>
 #include <linux/tcp.h>
 #include <linux/slab.h>
 #include <linux/skbuff.h>
@@ -386,7 +387,7 @@ static int gve_prep_tso(struct sk_buff *skb)
 				     (__force __wsum)htonl(paylen));
 
 		/* Compute length of segmentation header. */
-		header_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
+		header_len = skb_tcp_all_headers(skb);
 		break;
 	default:
 		return -EINVAL;
@@ -598,9 +599,9 @@ static int gve_num_buffer_descs_needed(const struct sk_buff *skb)
  */
 static bool gve_can_send_tso(const struct sk_buff *skb)
 {
-	const int header_len = skb_checksum_start_offset(skb) + tcp_hdrlen(skb);
 	const int max_bufs_per_seg = GVE_TX_MAX_DATA_DESCS - 1;
 	const struct skb_shared_info *shinfo = skb_shinfo(skb);
+	const int header_len = skb_tcp_all_headers(skb);
 	const int gso_size = shinfo->gso_size;
 	int cur_seg_num_bufs;
 	int cur_seg_size;
@@ -645,6 +646,9 @@ static int gve_try_tx_skb(struct gve_priv *priv, struct gve_tx_ring *tx,
 					    priv->dev->name);
 			goto drop;
 		}
+
+		if (unlikely(ipv6_hopopt_jumbo_remove(skb)))
+			goto drop;
 
 		num_buffer_descs = gve_num_buffer_descs_needed(skb);
 	} else {
@@ -795,7 +799,7 @@ static void gve_handle_packet_completion(struct gve_priv *priv,
 			     GVE_PACKET_STATE_PENDING_REINJECT_COMPL)) {
 			/* No outstanding miss completion but packet allocated
 			 * implies packet receives a re-injection completion
-			 * without a a prior miss completion. Return without
+			 * without a prior miss completion. Return without
 			 * completing the packet.
 			 */
 			net_err_ratelimited("%s: Re-injection completion received without corresponding miss completion: %d\n",
@@ -953,12 +957,18 @@ int gve_clean_tx_done_dqo(struct gve_priv *priv, struct gve_tx_ring *tx,
 			atomic_set_release(&tx->dqo_compl.hw_tx_head, tx_head);
 		} else if (type == GVE_COMPL_TYPE_DQO_PKT) {
 			u16 compl_tag = le16_to_cpu(compl_desc->completion_tag);
-
-			gve_handle_packet_completion(priv, tx, !!napi,
-						     compl_tag,
-						     &pkt_compl_bytes,
-						     &pkt_compl_pkts,
-						     /*is_reinjection=*/false);
+			if (compl_tag & GVE_ALT_MISS_COMPL_BIT) {
+				compl_tag &= ~GVE_ALT_MISS_COMPL_BIT;
+				gve_handle_miss_completion(priv, tx, compl_tag,
+							   &miss_compl_bytes,
+							   &miss_compl_pkts);
+			} else {
+				gve_handle_packet_completion(priv, tx, !!napi,
+							     compl_tag,
+							     &pkt_compl_bytes,
+							     &pkt_compl_pkts,
+							     false);
+			}
 		} else if (type == GVE_COMPL_TYPE_DQO_MISS) {
 			u16 compl_tag = le16_to_cpu(compl_desc->completion_tag);
 
@@ -972,7 +982,7 @@ int gve_clean_tx_done_dqo(struct gve_priv *priv, struct gve_tx_ring *tx,
 						     compl_tag,
 						     &reinject_compl_bytes,
 						     &reinject_compl_pkts,
-						     /*is_reinjection=*/true);
+						     true);
 		}
 
 		tx->dqo_compl.head =

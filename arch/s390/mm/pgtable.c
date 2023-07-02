@@ -115,7 +115,7 @@ static inline pte_t ptep_flush_lazy(struct mm_struct *mm,
 	atomic_inc(&mm->context.flush_count);
 	if (cpumask_equal(&mm->context.cpu_attach_mask,
 			  cpumask_of(smp_processor_id()))) {
-		pte_val(*ptep) |= _PAGE_INVALID;
+		set_pte(ptep, set_pte_bit(*ptep, __pgprot(_PAGE_INVALID)));
 		mm->context.flush_mm = 1;
 	} else
 		ptep_ipte_global(mm, addr, ptep, nodat);
@@ -224,15 +224,15 @@ static inline pgste_t pgste_set_pte(pte_t *ptep, pgste_t pgste, pte_t entry)
 			 * Without enhanced suppression-on-protection force
 			 * the dirty bit on for all writable ptes.
 			 */
-			pte_val(entry) |= _PAGE_DIRTY;
-			pte_val(entry) &= ~_PAGE_PROTECT;
+			entry = set_pte_bit(entry, __pgprot(_PAGE_DIRTY));
+			entry = clear_pte_bit(entry, __pgprot(_PAGE_PROTECT));
 		}
 		if (!(pte_val(entry) & _PAGE_PROTECT))
 			/* This pte allows write access, set user-dirty */
 			pgste_val(pgste) |= PGSTE_UC_BIT;
 	}
 #endif
-	*ptep = entry;
+	set_pte(ptep, entry);
 	return pgste;
 }
 
@@ -275,12 +275,12 @@ static inline pte_t ptep_xchg_commit(struct mm_struct *mm,
 			pgste = pgste_update_all(old, pgste, mm);
 			if ((pgste_val(pgste) & _PGSTE_GPS_USAGE_MASK) ==
 			    _PGSTE_GPS_USAGE_UNUSED)
-				pte_val(old) |= _PAGE_UNUSED;
+				old = set_pte_bit(old, __pgprot(_PAGE_UNUSED));
 		}
 		pgste = pgste_set_pte(ptep, pgste, new);
 		pgste_set_unlock(ptep, pgste);
 	} else {
-		*ptep = new;
+		set_pte(ptep, new);
 	}
 	return old;
 }
@@ -301,6 +301,31 @@ pte_t ptep_xchg_direct(struct mm_struct *mm, unsigned long addr,
 	return old;
 }
 EXPORT_SYMBOL(ptep_xchg_direct);
+
+/*
+ * Caller must check that new PTE only differs in _PAGE_PROTECT HW bit, so that
+ * RDP can be used instead of IPTE. See also comments at pte_allow_rdp().
+ */
+void ptep_reset_dat_prot(struct mm_struct *mm, unsigned long addr, pte_t *ptep,
+			 pte_t new)
+{
+	preempt_disable();
+	atomic_inc(&mm->context.flush_count);
+	if (cpumask_equal(mm_cpumask(mm), cpumask_of(smp_processor_id())))
+		__ptep_rdp(addr, ptep, 0, 0, 1);
+	else
+		__ptep_rdp(addr, ptep, 0, 0, 0);
+	/*
+	 * PTE is not invalidated by RDP, only _PAGE_PROTECT is cleared. That
+	 * means it is still valid and active, and must not be changed according
+	 * to the architecture. But writing a new value that only differs in SW
+	 * bits is allowed.
+	 */
+	set_pte(ptep, new);
+	atomic_dec(&mm->context.flush_count);
+	preempt_enable();
+}
+EXPORT_SYMBOL(ptep_reset_dat_prot);
 
 pte_t ptep_xchg_lazy(struct mm_struct *mm, unsigned long addr,
 		     pte_t *ptep, pte_t new)
@@ -345,14 +370,14 @@ void ptep_modify_prot_commit(struct vm_area_struct *vma, unsigned long addr,
 	struct mm_struct *mm = vma->vm_mm;
 
 	if (!MACHINE_HAS_NX)
-		pte_val(pte) &= ~_PAGE_NOEXEC;
+		pte = clear_pte_bit(pte, __pgprot(_PAGE_NOEXEC));
 	if (mm_has_pgste(mm)) {
 		pgste = pgste_get(ptep);
 		pgste_set_key(ptep, pgste, pte, mm);
 		pgste = pgste_set_pte(ptep, pgste, pte);
 		pgste_set_unlock(ptep, pgste);
 	} else {
-		*ptep = pte;
+		set_pte(ptep, pte);
 	}
 	preempt_enable();
 }
@@ -417,7 +442,7 @@ static inline pmd_t pmdp_flush_lazy(struct mm_struct *mm,
 	atomic_inc(&mm->context.flush_count);
 	if (cpumask_equal(&mm->context.cpu_attach_mask,
 			  cpumask_of(smp_processor_id()))) {
-		pmd_val(*pmdp) |= _SEGMENT_ENTRY_INVALID;
+		set_pmd(pmdp, set_pmd_bit(*pmdp, __pgprot(_SEGMENT_ENTRY_INVALID)));
 		mm->context.flush_mm = 1;
 		if (mm_has_pgste(mm))
 			gmap_pmdp_invalidate(mm, addr);
@@ -469,7 +494,7 @@ pmd_t pmdp_xchg_direct(struct mm_struct *mm, unsigned long addr,
 
 	preempt_disable();
 	old = pmdp_flush_direct(mm, addr, pmdp);
-	*pmdp = new;
+	set_pmd(pmdp, new);
 	preempt_enable();
 	return old;
 }
@@ -482,7 +507,7 @@ pmd_t pmdp_xchg_lazy(struct mm_struct *mm, unsigned long addr,
 
 	preempt_disable();
 	old = pmdp_flush_lazy(mm, addr, pmdp);
-	*pmdp = new;
+	set_pmd(pmdp, new);
 	preempt_enable();
 	return old;
 }
@@ -539,7 +564,7 @@ pud_t pudp_xchg_direct(struct mm_struct *mm, unsigned long addr,
 
 	preempt_disable();
 	old = pudp_flush_direct(mm, addr, pudp);
-	*pudp = new;
+	set_pud(pudp, new);
 	preempt_enable();
 	return old;
 }
@@ -579,9 +604,9 @@ pgtable_t pgtable_trans_huge_withdraw(struct mm_struct *mm, pmd_t *pmdp)
 		list_del(lh);
 	}
 	ptep = (pte_t *) pgtable;
-	pte_val(*ptep) = _PAGE_INVALID;
+	set_pte(ptep, __pte(_PAGE_INVALID));
 	ptep++;
-	pte_val(*ptep) = _PAGE_INVALID;
+	set_pte(ptep, __pte(_PAGE_INVALID));
 	return pgtable;
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
@@ -646,12 +671,12 @@ int ptep_force_prot(struct mm_struct *mm, unsigned long addr,
 	if (prot == PROT_NONE && !pte_i) {
 		ptep_flush_direct(mm, addr, ptep, nodat);
 		pgste = pgste_update_all(entry, pgste, mm);
-		pte_val(entry) |= _PAGE_INVALID;
+		entry = set_pte_bit(entry, __pgprot(_PAGE_INVALID));
 	}
 	if (prot == PROT_READ && !pte_p) {
 		ptep_flush_direct(mm, addr, ptep, nodat);
-		pte_val(entry) &= ~_PAGE_INVALID;
-		pte_val(entry) |= _PAGE_PROTECT;
+		entry = clear_pte_bit(entry, __pgprot(_PAGE_INVALID));
+		entry = set_pte_bit(entry, __pgprot(_PAGE_PROTECT));
 	}
 	pgste_val(pgste) |= bit;
 	pgste = pgste_set_pte(ptep, pgste, entry);
@@ -675,8 +700,8 @@ int ptep_shadow_pte(struct mm_struct *mm, unsigned long saddr,
 	      !(pte_val(pte) & _PAGE_PROTECT))) {
 		pgste_val(spgste) |= PGSTE_VSIE_BIT;
 		tpgste = pgste_get_lock(tptep);
-		pte_val(tpte) = (pte_val(spte) & PAGE_MASK) |
-				(pte_val(pte) & _PAGE_PROTECT);
+		tpte = __pte((pte_val(spte) & PAGE_MASK) |
+			     (pte_val(pte) & _PAGE_PROTECT));
 		/* don't touch the storage key - it belongs to parent pgste */
 		tpgste = pgste_set_pte(tptep, tpgste, tpte);
 		pgste_set_unlock(tptep, tpgste);
@@ -748,7 +773,7 @@ void ptep_zap_key(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
 	pgste_val(pgste) |= PGSTE_GR_BIT | PGSTE_GC_BIT;
 	ptev = pte_val(*ptep);
 	if (!(ptev & _PAGE_INVALID) && (ptev & _PAGE_WRITE))
-		page_set_storage_key(ptev & PAGE_MASK, PAGE_DEFAULT_KEY, 1);
+		page_set_storage_key(ptev & PAGE_MASK, PAGE_DEFAULT_KEY, 0);
 	pgste_set_unlock(ptep, pgste);
 	preempt_enable();
 }
@@ -773,10 +798,10 @@ bool ptep_test_and_clear_uc(struct mm_struct *mm, unsigned long addr,
 		nodat = !!(pgste_val(pgste) & _PGSTE_GPS_NODAT);
 		ptep_ipte_global(mm, addr, ptep, nodat);
 		if (MACHINE_HAS_ESOP || !(pte_val(pte) & _PAGE_WRITE))
-			pte_val(pte) |= _PAGE_PROTECT;
+			pte = set_pte_bit(pte, __pgprot(_PAGE_PROTECT));
 		else
-			pte_val(pte) |= _PAGE_INVALID;
-		*ptep = pte;
+			pte = set_pte_bit(pte, __pgprot(_PAGE_INVALID));
+		set_pte(ptep, pte);
 	}
 	pgste_set_unlock(ptep, pgste);
 	return dirty;
@@ -804,7 +829,7 @@ int set_guest_storage_key(struct mm_struct *mm, unsigned long addr,
 	default:
 		return -EFAULT;
 	}
-
+again:
 	ptl = pmd_lock(mm, pmdp);
 	if (!pmd_present(*pmdp)) {
 		spin_unlock(ptl);
@@ -825,6 +850,8 @@ int set_guest_storage_key(struct mm_struct *mm, unsigned long addr,
 	spin_unlock(ptl);
 
 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep)
+		goto again;
 	new = old = pgste_get_lock(ptep);
 	pgste_val(new) &= ~(PGSTE_GR_BIT | PGSTE_GC_BIT |
 			    PGSTE_ACC_BITS | PGSTE_FP_BIT);
@@ -913,7 +940,7 @@ int reset_guest_reference_bit(struct mm_struct *mm, unsigned long addr)
 	default:
 		return -EFAULT;
 	}
-
+again:
 	ptl = pmd_lock(mm, pmdp);
 	if (!pmd_present(*pmdp)) {
 		spin_unlock(ptl);
@@ -930,6 +957,8 @@ int reset_guest_reference_bit(struct mm_struct *mm, unsigned long addr)
 	spin_unlock(ptl);
 
 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep)
+		goto again;
 	new = old = pgste_get_lock(ptep);
 	/* Reset guest reference bit only */
 	pgste_val(new) &= ~PGSTE_GR_BIT;
@@ -975,7 +1004,7 @@ int get_guest_storage_key(struct mm_struct *mm, unsigned long addr,
 	default:
 		return -EFAULT;
 	}
-
+again:
 	ptl = pmd_lock(mm, pmdp);
 	if (!pmd_present(*pmdp)) {
 		spin_unlock(ptl);
@@ -992,6 +1021,8 @@ int get_guest_storage_key(struct mm_struct *mm, unsigned long addr,
 	spin_unlock(ptl);
 
 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep)
+		goto again;
 	pgste = pgste_get_lock(ptep);
 	*key = (pgste_val(pgste) & (PGSTE_ACC_BITS | PGSTE_FP_BIT)) >> 56;
 	paddr = pte_val(*ptep) & PAGE_MASK;

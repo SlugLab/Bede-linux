@@ -91,7 +91,7 @@ static void arc_emac_get_drvinfo(struct net_device *ndev,
 {
 	struct arc_emac_priv *priv = netdev_priv(ndev);
 
-	strlcpy(info->driver, priv->drv_name, sizeof(info->driver));
+	strscpy(info->driver, priv->drv_name, sizeof(info->driver));
 }
 
 static const struct ethtool_ops arc_emac_ethtool_ops = {
@@ -981,7 +981,8 @@ int arc_emac_probe(struct net_device *ndev, int interface)
 	dev_info(dev, "connected to %s phy with id 0x%x\n",
 		 phydev->drv->name, phydev->phy_id);
 
-	netif_napi_add(ndev, &priv->napi, arc_emac_poll, ARC_EMAC_NAPI_WEIGHT);
+	netif_napi_add_weight(ndev, &priv->napi, arc_emac_poll,
+			      ARC_EMAC_NAPI_WEIGHT);
 
 	err = register_netdev(ndev);
 	if (err) {
@@ -1007,7 +1008,7 @@ out_put_node:
 }
 EXPORT_SYMBOL_GPL(arc_emac_probe);
 
-int arc_emac_remove(struct net_device *ndev)
+void arc_emac_remove(struct net_device *ndev)
 {
 	struct arc_emac_priv *priv = netdev_priv(ndev);
 
@@ -1018,8 +1019,6 @@ int arc_emac_remove(struct net_device *ndev)
 
 	if (!IS_ERR(priv->clk))
 		clk_disable_unprepare(priv->clk);
-
-	return 0;
 }
 EXPORT_SYMBOL_GPL(arc_emac_remove);
 

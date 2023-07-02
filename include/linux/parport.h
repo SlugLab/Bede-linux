@@ -40,10 +40,6 @@ struct amiga_parport_state {
        unsigned char statusdir;/* ciab.ddrb & 7 */
 };
 
-struct ax88796_parport_state {
-	unsigned char cpr;
-};
-
 struct ip32_parport_state {
 	unsigned int dcr;
 	unsigned int ecr;
@@ -55,7 +51,6 @@ struct parport_state {
 		/* ARC has no state. */
 		struct ax_parport_state ax;
 		struct amiga_parport_state amiga;
-		struct ax88796_parport_state ax88796;
 		/* Atari has not state. */
 		struct ip32_parport_state ip32;
 		void *misc; 
@@ -184,6 +179,8 @@ struct ieee1284_info {
 	volatile enum ieee1284_phase phase;
 	struct semaphore irq;
 };
+
+#define PARPORT_NAME_MAX_LEN 15
 
 /* A parallel port */
 struct parport {

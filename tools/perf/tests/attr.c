@@ -34,7 +34,7 @@
 #include "event.h"
 #include "util.h"
 #include "tests.h"
-#include "pmu.h"
+#include "pmus.h"
 
 #define ENV "PERF_TEST_ATTR"
 
@@ -65,7 +65,7 @@ do {									\
 
 #define WRITE_ASS(field, fmt) __WRITE_ASS(field, fmt, attr->field)
 
-static int store_event(struct perf_event_attr *attr, pid_t pid, int cpu,
+static int store_event(struct perf_event_attr *attr, pid_t pid, struct perf_cpu cpu,
 		       int fd, int group_fd, unsigned long flags)
 {
 	FILE *file;
@@ -93,7 +93,7 @@ static int store_event(struct perf_event_attr *attr, pid_t pid, int cpu,
 	/* syscall arguments */
 	__WRITE_ASS(fd,       "d", fd);
 	__WRITE_ASS(group_fd, "d", group_fd);
-	__WRITE_ASS(cpu,      "d", cpu);
+	__WRITE_ASS(cpu,      "d", cpu.cpu);
 	__WRITE_ASS(pid,      "d", pid);
 	__WRITE_ASS(flags,   "lu", flags);
 
@@ -144,7 +144,7 @@ static int store_event(struct perf_event_attr *attr, pid_t pid, int cpu,
 	return 0;
 }
 
-void test_attr__open(struct perf_event_attr *attr, pid_t pid, int cpu,
+void test_attr__open(struct perf_event_attr *attr, pid_t pid, struct perf_cpu cpu,
 		     int fd, int group_fd, unsigned long flags)
 {
 	int errno_saved = errno;
@@ -185,8 +185,15 @@ static int test__attr(struct test_suite *test __maybe_unused, int subtest __mayb
 	char path_dir[PATH_MAX];
 	char *exec_path;
 
-	if (perf_pmu__has_hybrid())
+	if (perf_pmus__num_core_pmus() > 1) {
+		/*
+		 * TODO: Attribute tests hard code the PMU type. If there are >1
+		 * core PMU then each PMU will have a different type whic
+		 * requires additional support.
+		 */
+		pr_debug("Skip test on hybrid systems");
 		return TEST_SKIP;
+	}
 
 	/* First try development tree tests. */
 	if (!lstat("./tests", &st))

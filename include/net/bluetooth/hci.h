@@ -246,6 +246,69 @@ enum {
 	 * HCI after resume.
 	 */
 	HCI_QUIRK_NO_SUSPEND_NOTIFIER,
+
+	/*
+	 * When this quirk is set, LE tx power is not queried on startup
+	 * and the min/max tx power values default to HCI_TX_POWER_INVALID.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_BROKEN_READ_TRANSMIT_POWER,
+
+	/* When this quirk is set, HCI_OP_SET_EVENT_FLT requests with
+	 * HCI_FLT_CLEAR_ALL are ignored and event filtering is
+	 * completely avoided. A subset of the CSR controller
+	 * clones struggle with this and instantly lock up.
+	 *
+	 * Note that devices using this must (separately) disable
+	 * runtime suspend, because event filtering takes place there.
+	 */
+	HCI_QUIRK_BROKEN_FILTER_CLEAR_ALL,
+
+	/*
+	 * When this quirk is set, disables the use of
+	 * HCI_OP_ENHANCED_SETUP_SYNC_CONN command to setup SCO connections.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_BROKEN_ENHANCED_SETUP_SYNC_CONN,
+
+	/*
+	 * When this quirk is set, the HCI_OP_LE_SET_EXT_SCAN_ENABLE command is
+	 * disabled. This is required for some Broadcom controllers which
+	 * erroneously claim to support extended scanning.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_BROKEN_EXT_SCAN,
+
+	/*
+	 * When this quirk is set, the HCI_OP_GET_MWS_TRANSPORT_CONFIG command is
+	 * disabled. This is required for some Broadcom controllers which
+	 * erroneously claim to support MWS Transport Layer Configuration.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_BROKEN_MWS_TRANSPORT_CONFIG,
+
+	/* When this quirk is set, max_page for local extended features
+	 * is set to 1, even if controller reports higher number. Some
+	 * controllers (e.g. RTL8723CS) report more pages, but they
+	 * don't actually support features declared there.
+	 */
+	HCI_QUIRK_BROKEN_LOCAL_EXT_FEATURES_PAGE_2,
+
+	/*
+	 * When this quirk is set, the HCI_OP_LE_SET_RPA_TIMEOUT command is
+	 * skipped during initialization. This is required for the Actions
+	 * Semiconductor ATS2851 based controllers, which erroneously claims
+	 * to support it.
+	 */
+	HCI_QUIRK_BROKEN_SET_RPA_TIMEOUT,
 };
 
 /* HCI device flags */
@@ -287,6 +350,7 @@ enum {
 enum {
 	HCI_SETUP,
 	HCI_CONFIG,
+	HCI_DEBUGFS_CREATED,
 	HCI_AUTO_OFF,
 	HCI_RFKILLED,
 	HCI_MGMT,
@@ -299,6 +363,7 @@ enum {
 	HCI_USER_CHANNEL,
 	HCI_EXT_CONFIGURED,
 	HCI_LE_ADV,
+	HCI_LE_PER_ADV,
 	HCI_LE_SCAN,
 	HCI_SSP_ENABLED,
 	HCI_SC_ENABLED,
@@ -321,6 +386,7 @@ enum {
 	HCI_LE_SCAN_INTERRUPTED,
 	HCI_WIDEBAND_SPEECH_ENABLED,
 	HCI_EVENT_FILTER_CONFIGURED,
+	HCI_PA_SYNC,
 
 	HCI_DUT_MODE,
 	HCI_VENDOR_DIAG,
@@ -332,6 +398,12 @@ enum {
 	HCI_FORCE_NO_MITM,
 	HCI_QUALITY_REPORT,
 	HCI_OFFLOAD_CODECS_ENABLED,
+	HCI_LE_SIMULTANEOUS_ROLES,
+	HCI_CMD_DRAIN_WORKQUEUE,
+
+	HCI_MESH_EXPERIMENTAL,
+	HCI_MESH,
+	HCI_MESH_SENDING,
 
 	__HCI_NUM_FLAGS,
 };
@@ -467,6 +539,7 @@ enum {
 #define LMP_EXT_INQ	0x01
 #define LMP_SIMUL_LE_BR	0x02
 #define LMP_SIMPLE_PAIR	0x08
+#define LMP_ERR_DATA_REPORTING 0x20
 #define LMP_NO_FLUSH	0x40
 
 #define LMP_LSTO	0x01
@@ -499,9 +572,11 @@ enum {
 #define HCI_LE_PHY_2M			0x01
 #define HCI_LE_PHY_CODED		0x08
 #define HCI_LE_EXT_ADV			0x10
+#define HCI_LE_PERIODIC_ADV		0x20
 #define HCI_LE_CHAN_SEL_ALG2		0x40
 #define HCI_LE_CIS_CENTRAL		0x10
 #define HCI_LE_CIS_PERIPHERAL		0x20
+#define HCI_LE_ISO_BROADCASTER		0x40
 
 /* Connection modes */
 #define HCI_CM_ACTIVE	0x0000
@@ -558,6 +633,7 @@ enum {
 #define HCI_ERROR_CONNECTION_TIMEOUT	0x08
 #define HCI_ERROR_REJ_LIMITED_RESOURCES	0x0d
 #define HCI_ERROR_REJ_BAD_ADDR		0x0f
+#define HCI_ERROR_INVALID_PARAMETERS	0x12
 #define HCI_ERROR_REMOTE_USER_TERM	0x13
 #define HCI_ERROR_REMOTE_LOW_RESOURCES	0x14
 #define HCI_ERROR_REMOTE_POWER_OFF	0x15
@@ -566,6 +642,7 @@ enum {
 #define HCI_ERROR_INVALID_LL_PARAMS	0x1e
 #define HCI_ERROR_UNSPECIFIED		0x1f
 #define HCI_ERROR_ADVERTISING_TIMEOUT	0x3c
+#define HCI_ERROR_CANCELLED_BY_HOST	0x44
 
 /* Flow control modes */
 #define HCI_FLOW_CTL_MODE_PACKET_BASED	0x00
@@ -594,6 +671,7 @@ enum {
 #define EIR_SSP_RAND_R192	0x0F /* Simple Pairing Randomizer R-192 */
 #define EIR_DEVICE_ID		0x10 /* device ID */
 #define EIR_APPEARANCE		0x19 /* Device appearance */
+#define EIR_SERVICE_DATA	0x16 /* Service Data */
 #define EIR_LE_BDADDR		0x1B /* LE Bluetooth device address */
 #define EIR_LE_ROLE		0x1C /* LE role */
 #define EIR_SSP_HASH_C256	0x1D /* Simple Pairing Hash C-256 */
@@ -1046,8 +1124,8 @@ struct hci_cp_read_stored_link_key {
 } __packed;
 struct hci_rp_read_stored_link_key {
 	__u8     status;
-	__u8     max_keys;
-	__u8     num_keys;
+	__le16   max_keys;
+	__le16   num_keys;
 } __packed;
 
 #define HCI_OP_DELETE_STORED_LINK_KEY	0x0c12
@@ -1057,7 +1135,7 @@ struct hci_cp_delete_stored_link_key {
 } __packed;
 struct hci_rp_delete_stored_link_key {
 	__u8     status;
-	__u8     num_keys;
+	__le16   num_keys;
 } __packed;
 
 #define HCI_MAX_NAME_LENGTH		248
@@ -1393,7 +1471,6 @@ struct hci_std_codecs_v2 {
 } __packed;
 
 struct hci_vnd_codec_v2 {
-	__u8	id;
 	__le16	cid;
 	__le16	vid;
 	__u8	transport;
@@ -1842,6 +1919,22 @@ struct hci_cp_le_ext_conn_param {
 	__le16 max_ce_len;
 } __packed;
 
+#define HCI_OP_LE_PA_CREATE_SYNC	0x2044
+struct hci_cp_le_pa_create_sync {
+	__u8      options;
+	__u8      sid;
+	__u8      addr_type;
+	bdaddr_t  addr;
+	__le16    skip;
+	__le16    sync_timeout;
+	__u8      sync_cte_type;
+} __packed;
+
+#define HCI_OP_LE_PA_TERM_SYNC		0x2046
+struct hci_cp_le_pa_term_sync {
+	__le16    handle;
+} __packed;
+
 #define HCI_OP_LE_READ_NUM_SUPPORTED_ADV_SETS	0x203b
 struct hci_rp_le_read_num_supported_adv_sets {
 	__u8  status;
@@ -1876,13 +1969,6 @@ struct hci_rp_le_set_ext_adv_params {
 	__u8  tx_power;
 } __packed;
 
-#define HCI_OP_LE_SET_EXT_ADV_ENABLE		0x2039
-struct hci_cp_le_set_ext_adv_enable {
-	__u8  enable;
-	__u8  num_of_sets;
-	__u8  data[];
-} __packed;
-
 struct hci_cp_ext_adv_set {
 	__u8  handle;
 	__le16 duration;
@@ -1909,6 +1995,37 @@ struct hci_cp_le_set_ext_scan_rsp_data {
 	__u8  data[];
 } __packed;
 
+#define HCI_OP_LE_SET_EXT_ADV_ENABLE		0x2039
+struct hci_cp_le_set_ext_adv_enable {
+	__u8  enable;
+	__u8  num_of_sets;
+	__u8  data[];
+} __packed;
+
+#define HCI_OP_LE_SET_PER_ADV_PARAMS		0x203e
+struct hci_cp_le_set_per_adv_params {
+	__u8      handle;
+	__le16    min_interval;
+	__le16    max_interval;
+	__le16    periodic_properties;
+} __packed;
+
+#define HCI_MAX_PER_AD_LENGTH	252
+
+#define HCI_OP_LE_SET_PER_ADV_DATA		0x203f
+struct hci_cp_le_set_per_adv_data {
+	__u8  handle;
+	__u8  operation;
+	__u8  length;
+	__u8  data[];
+} __packed;
+
+#define HCI_OP_LE_SET_PER_ADV_ENABLE		0x2040
+struct hci_cp_le_set_per_adv_enable {
+	__u8  enable;
+	__u8  handle;
+} __packed;
+
 #define LE_SET_ADV_DATA_OP_COMPLETE	0x03
 
 #define LE_SET_ADV_DATA_NO_FRAG		0x01
@@ -1928,6 +2045,16 @@ struct hci_rp_le_read_transmit_power {
 	__u8  status;
 	__s8  min_le_tx_power;
 	__s8  max_le_tx_power;
+} __packed;
+
+#define HCI_NETWORK_PRIVACY		0x00
+#define HCI_DEVICE_PRIVACY		0x01
+
+#define HCI_OP_LE_SET_PRIVACY_MODE	0x204e
+struct hci_cp_le_set_privacy_mode {
+	__u8  bdaddr_type;
+	bdaddr_t  bdaddr;
+	__u8  mode;
 } __packed;
 
 #define HCI_OP_LE_READ_BUFFER_SIZE_V2	0x2060
@@ -1956,7 +2083,7 @@ struct hci_rp_le_read_iso_tx_sync {
 struct hci_cis_params {
 	__u8    cis_id;
 	__le16  c_sdu;
-	__le16  p_pdu;
+	__le16  p_sdu;
 	__u8    c_phy;
 	__u8    p_phy;
 	__u8    c_rtn;
@@ -1967,7 +2094,7 @@ struct hci_cp_le_set_cig_params {
 	__u8    cig_id;
 	__u8    c_interval[3];
 	__u8    p_interval[3];
-	__u8    wc_sca;
+	__u8    sca;
 	__u8    packing;
 	__u8    framing;
 	__le16  c_latency;
@@ -2010,7 +2137,78 @@ struct hci_cp_le_reject_cis {
 	__u8    reason;
 } __packed;
 
+#define HCI_OP_LE_CREATE_BIG			0x2068
+struct hci_bis {
+	__u8    sdu_interval[3];
+	__le16  sdu;
+	__le16  latency;
+	__u8    rtn;
+	__u8    phy;
+	__u8    packing;
+	__u8    framing;
+	__u8    encryption;
+	__u8    bcode[16];
+} __packed;
+
+struct hci_cp_le_create_big {
+	__u8    handle;
+	__u8    adv_handle;
+	__u8    num_bis;
+	struct hci_bis bis;
+} __packed;
+
+#define HCI_OP_LE_TERM_BIG			0x206a
+struct hci_cp_le_term_big {
+	__u8    handle;
+	__u8    reason;
+} __packed;
+
+#define HCI_OP_LE_BIG_CREATE_SYNC		0x206b
+struct hci_cp_le_big_create_sync {
+	__u8    handle;
+	__le16  sync_handle;
+	__u8    encryption;
+	__u8    bcode[16];
+	__u8    mse;
+	__le16  timeout;
+	__u8    num_bis;
+	__u8    bis[];
+} __packed;
+
+#define HCI_OP_LE_BIG_TERM_SYNC			0x206c
+struct hci_cp_le_big_term_sync {
+	__u8    handle;
+} __packed;
+
+#define HCI_OP_LE_SETUP_ISO_PATH		0x206e
+struct hci_cp_le_setup_iso_path {
+	__le16  handle;
+	__u8    direction;
+	__u8    path;
+	__u8    codec;
+	__le16  codec_cid;
+	__le16  codec_vid;
+	__u8    delay[3];
+	__u8    codec_cfg_len;
+	__u8    codec_cfg[];
+} __packed;
+
+struct hci_rp_le_setup_iso_path {
+	__u8    status;
+	__le16  handle;
+} __packed;
+
+#define HCI_OP_LE_SET_HOST_FEATURE		0x2074
+struct hci_cp_le_set_host_feature {
+	__u8     bit_number;
+	__u8     bit_value;
+} __packed;
+
 /* ---- HCI Events ---- */
+struct hci_ev_status {
+	__u8    status;
+} __packed;
+
 #define HCI_EV_INQUIRY_COMPLETE		0x01
 
 #define HCI_EV_INQUIRY_RESULT		0x02
@@ -2022,6 +2220,11 @@ struct inquiry_info {
 	__u8     dev_class[3];
 	__le16   clock_offset;
 } __packed;
+
+struct hci_ev_inquiry_result {
+	__u8    num;
+	struct inquiry_info info[];
+};
 
 #define HCI_EV_CONN_COMPLETE		0x03
 struct hci_ev_conn_complete {
@@ -2134,7 +2337,7 @@ struct hci_comp_pkts_info {
 } __packed;
 
 struct hci_ev_num_comp_pkts {
-	__u8     num_hndl;
+	__u8     num;
 	struct hci_comp_pkts_info handles[];
 } __packed;
 
@@ -2184,7 +2387,7 @@ struct hci_ev_pscan_rep_mode {
 } __packed;
 
 #define HCI_EV_INQUIRY_RESULT_WITH_RSSI	0x22
-struct inquiry_info_with_rssi {
+struct inquiry_info_rssi {
 	bdaddr_t bdaddr;
 	__u8     pscan_rep_mode;
 	__u8     pscan_period_mode;
@@ -2192,7 +2395,7 @@ struct inquiry_info_with_rssi {
 	__le16   clock_offset;
 	__s8     rssi;
 } __packed;
-struct inquiry_info_with_rssi_and_pscan_mode {
+struct inquiry_info_rssi_pscan {
 	bdaddr_t bdaddr;
 	__u8     pscan_rep_mode;
 	__u8     pscan_period_mode;
@@ -2200,6 +2403,10 @@ struct inquiry_info_with_rssi_and_pscan_mode {
 	__u8     dev_class[3];
 	__le16   clock_offset;
 	__s8     rssi;
+} __packed;
+struct hci_ev_inquiry_result_rssi {
+	__u8     num;
+	__u8     data[];
 } __packed;
 
 #define HCI_EV_REMOTE_EXT_FEATURES	0x23
@@ -2253,6 +2460,11 @@ struct extended_inquiry_info {
 	__le16   clock_offset;
 	__s8     rssi;
 	__u8     data[240];
+} __packed;
+
+struct hci_ev_ext_inquiry_result {
+	__u8     num;
+	struct extended_inquiry_info info[];
 } __packed;
 
 #define HCI_EV_KEY_REFRESH_COMPLETE	0x30
@@ -2414,6 +2626,7 @@ struct hci_ev_le_conn_complete {
 #define LE_EXT_ADV_DIRECT_IND		0x0004
 #define LE_EXT_ADV_SCAN_RSP		0x0008
 #define LE_EXT_ADV_LEGACY_PDU		0x0010
+#define LE_EXT_ADV_EVT_TYPE_MASK	0x007f
 
 #define ADDR_LE_DEV_PUBLIC		0x00
 #define ADDR_LE_DEV_RANDOM		0x01
@@ -2422,11 +2635,16 @@ struct hci_ev_le_conn_complete {
 
 #define HCI_EV_LE_ADVERTISING_REPORT	0x02
 struct hci_ev_le_advertising_info {
-	__u8	 evt_type;
+	__u8	 type;
 	__u8	 bdaddr_type;
 	bdaddr_t bdaddr;
 	__u8	 length;
 	__u8	 data[];
+} __packed;
+
+struct hci_ev_le_advertising_report {
+	__u8    num;
+	struct hci_ev_le_advertising_info info[];
 } __packed;
 
 #define HCI_EV_LE_CONN_UPDATE_COMPLETE	0x03
@@ -2472,12 +2690,17 @@ struct hci_ev_le_data_len_change {
 
 #define HCI_EV_LE_DIRECT_ADV_REPORT	0x0B
 struct hci_ev_le_direct_adv_info {
-	__u8	 evt_type;
+	__u8	 type;
 	__u8	 bdaddr_type;
 	bdaddr_t bdaddr;
 	__u8	 direct_addr_type;
 	bdaddr_t direct_addr;
 	__s8	 rssi;
+} __packed;
+
+struct hci_ev_le_direct_adv_report {
+	__u8	 num;
+	struct hci_ev_le_direct_adv_info info[];
 } __packed;
 
 #define HCI_EV_LE_PHY_UPDATE_COMPLETE	0x0c
@@ -2489,8 +2712,8 @@ struct hci_ev_le_phy_update_complete {
 } __packed;
 
 #define HCI_EV_LE_EXT_ADV_REPORT    0x0d
-struct hci_ev_le_ext_adv_report {
-	__le16 	 evt_type;
+struct hci_ev_le_ext_adv_info {
+	__le16   type;
 	__u8	 bdaddr_type;
 	bdaddr_t bdaddr;
 	__u8	 primary_phy;
@@ -2498,11 +2721,28 @@ struct hci_ev_le_ext_adv_report {
 	__u8	 sid;
 	__u8	 tx_power;
 	__s8	 rssi;
-	__le16 	 interval;
-	__u8  	 direct_addr_type;
+	__le16   interval;
+	__u8     direct_addr_type;
 	bdaddr_t direct_addr;
-	__u8  	 length;
-	__u8	 data[];
+	__u8     length;
+	__u8     data[];
+} __packed;
+
+struct hci_ev_le_ext_adv_report {
+	__u8     num;
+	struct hci_ev_le_ext_adv_info info[];
+} __packed;
+
+#define HCI_EV_LE_PA_SYNC_ESTABLISHED	0x0e
+struct hci_ev_le_pa_sync_established {
+	__u8      status;
+	__le16    handle;
+	__u8      sid;
+	__u8      bdaddr_type;
+	bdaddr_t  bdaddr;
+	__u8      phy;
+	__le16    interval;
+	__u8      clock_accuracy;
 } __packed;
 
 #define HCI_EV_LE_ENHANCED_CONN_COMPLETE    0x0a
@@ -2554,6 +2794,55 @@ struct hci_evt_le_cis_req {
 	__le16 cis_handle;
 	__u8  cig_id;
 	__u8  cis_id;
+} __packed;
+
+#define HCI_EVT_LE_CREATE_BIG_COMPLETE	0x1b
+struct hci_evt_le_create_big_complete {
+	__u8    status;
+	__u8    handle;
+	__u8    sync_delay[3];
+	__u8    transport_delay[3];
+	__u8    phy;
+	__u8    nse;
+	__u8    bn;
+	__u8    pto;
+	__u8    irc;
+	__le16  max_pdu;
+	__le16  interval;
+	__u8    num_bis;
+	__le16  bis_handle[];
+} __packed;
+
+#define HCI_EVT_LE_BIG_SYNC_ESTABILISHED 0x1d
+struct hci_evt_le_big_sync_estabilished {
+	__u8    status;
+	__u8    handle;
+	__u8    latency[3];
+	__u8    nse;
+	__u8    bn;
+	__u8    pto;
+	__u8    irc;
+	__le16  max_pdu;
+	__le16  interval;
+	__u8    num_bis;
+	__le16  bis[];
+} __packed;
+
+#define HCI_EVT_LE_BIG_INFO_ADV_REPORT	0x22
+struct hci_evt_le_big_info_adv_report {
+	__le16  sync_handle;
+	__u8    num_bis;
+	__u8    nse;
+	__le16  iso_interval;
+	__u8    bn;
+	__u8    pto;
+	__u8    irc;
+	__le16  max_pdu;
+	__u8    sdu_interval[3];
+	__le16  max_sdu;
+	__u8    phy;
+	__u8    framing;
+	__u8    encryption;
 } __packed;
 
 #define HCI_EV_VENDOR			0xff

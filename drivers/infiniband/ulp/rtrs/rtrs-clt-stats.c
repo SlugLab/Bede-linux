@@ -13,13 +13,13 @@
 
 void rtrs_clt_update_wc_stats(struct rtrs_clt_con *con)
 {
-	struct rtrs_clt_sess *sess = to_clt_sess(con->c.sess);
-	struct rtrs_clt_stats *stats = sess->stats;
+	struct rtrs_clt_path *clt_path = to_clt_path(con->c.path);
+	struct rtrs_clt_stats *stats = clt_path->stats;
 	struct rtrs_clt_stats_pcpu *s;
 	int cpu;
 
 	cpu = raw_smp_processor_id();
-	s = this_cpu_ptr(stats->pcpu_stats);
+	s = get_cpu_ptr(stats->pcpu_stats);
 	if (con->cpu != cpu) {
 		s->cpu_migr.to++;
 
@@ -27,14 +27,12 @@ void rtrs_clt_update_wc_stats(struct rtrs_clt_con *con)
 		s = per_cpu_ptr(stats->pcpu_stats, con->cpu);
 		atomic_inc(&s->cpu_migr.from);
 	}
+	put_cpu_ptr(stats->pcpu_stats);
 }
 
 void rtrs_clt_inc_failover_cnt(struct rtrs_clt_stats *stats)
 {
-	struct rtrs_clt_stats_pcpu *s;
-
-	s = this_cpu_ptr(stats->pcpu_stats);
-	s->rdma.failover_cnt++;
+	this_cpu_inc(stats->pcpu_stats->rdma.failover_cnt);
 }
 
 int rtrs_clt_stats_migration_from_cnt_to_str(struct rtrs_clt_stats *stats, char *buf)
@@ -167,18 +165,15 @@ int rtrs_clt_reset_all_stats(struct rtrs_clt_stats *s, bool enable)
 static inline void rtrs_clt_update_rdma_stats(struct rtrs_clt_stats *stats,
 					       size_t size, int d)
 {
-	struct rtrs_clt_stats_pcpu *s;
-
-	s = this_cpu_ptr(stats->pcpu_stats);
-	s->rdma.dir[d].cnt++;
-	s->rdma.dir[d].size_total += size;
+	this_cpu_inc(stats->pcpu_stats->rdma.dir[d].cnt);
+	this_cpu_add(stats->pcpu_stats->rdma.dir[d].size_total, size);
 }
 
 void rtrs_clt_update_all_stats(struct rtrs_clt_io_req *req, int dir)
 {
 	struct rtrs_clt_con *con = req->con;
-	struct rtrs_clt_sess *sess = to_clt_sess(con->c.sess);
-	struct rtrs_clt_stats *stats = sess->stats;
+	struct rtrs_clt_path *clt_path = to_clt_path(con->c.path);
+	struct rtrs_clt_stats *stats = clt_path->stats;
 	unsigned int len;
 
 	len = req->usr_len + req->data_len;

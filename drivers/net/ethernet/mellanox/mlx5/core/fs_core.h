@@ -54,8 +54,14 @@ struct mlx5_flow_definer {
 	u32 id;
 };
 
+enum mlx5_flow_resource_owner {
+	MLX5_FLOW_RESOURCE_OWNER_FW,
+	MLX5_FLOW_RESOURCE_OWNER_SW,
+};
+
 struct mlx5_modify_hdr {
 	enum mlx5_flow_namespace_type ns_type;
+	enum mlx5_flow_resource_owner owner;
 	union {
 		struct mlx5_fs_dr_action action;
 		u32 id;
@@ -65,6 +71,7 @@ struct mlx5_modify_hdr {
 struct mlx5_pkt_reformat {
 	enum mlx5_flow_namespace_type ns_type;
 	int reformat_type; /* from mlx5_ifc */
+	enum mlx5_flow_resource_owner owner;
 	union {
 		struct mlx5_fs_dr_action action;
 		u32 id;
@@ -118,6 +125,12 @@ enum fs_fte_status {
 enum mlx5_flow_steering_mode {
 	MLX5_FLOW_STEERING_MODE_DMFS,
 	MLX5_FLOW_STEERING_MODE_SMFS
+};
+
+enum mlx5_flow_steering_capabilty {
+	MLX5_FLOW_STEERING_CAP_VLAN_PUSH_ON_RX = 1UL << 0,
+	MLX5_FLOW_STEERING_CAP_VLAN_POP_ON_TX = 1UL << 1,
+	MLX5_FLOW_STEERING_CAP_MATCH_RANGES = 1UL << 2,
 };
 
 struct mlx5_flow_steering {
@@ -203,7 +216,7 @@ struct mlx5_ft_underlay_qp {
 	u32 qpn;
 };
 
-#define MLX5_FTE_MATCH_PARAM_RESERVED	reserved_at_c00
+#define MLX5_FTE_MATCH_PARAM_RESERVED	reserved_at_e00
 /* Calculate the fte_match_param length and without the reserved length.
  * Make sure the reserved field is the last.
  */
@@ -221,6 +234,7 @@ struct fs_fte {
 	struct mlx5_fs_dr_rule		fs_dr_rule;
 	u32				val[MLX5_ST_SZ_DW_MATCH_PARAM];
 	u32				dests_size;
+	u32				fwd_dests;
 	u32				index;
 	struct mlx5_flow_context	flow_context;
 	struct mlx5_flow_act		action;
@@ -288,18 +302,23 @@ void mlx5_fc_update_sampling_interval(struct mlx5_core_dev *dev,
 const struct mlx5_flow_cmds *mlx5_fs_cmd_get_fw_cmds(void);
 
 int mlx5_flow_namespace_set_peer(struct mlx5_flow_root_namespace *ns,
-				 struct mlx5_flow_root_namespace *peer_ns);
+				 struct mlx5_flow_root_namespace *peer_ns,
+				 u8 peer_idx);
 
 int mlx5_flow_namespace_set_mode(struct mlx5_flow_namespace *ns,
 				 enum mlx5_flow_steering_mode mode);
 
-int mlx5_init_fs(struct mlx5_core_dev *dev);
-void mlx5_cleanup_fs(struct mlx5_core_dev *dev);
+int mlx5_fs_core_alloc(struct mlx5_core_dev *dev);
+void mlx5_fs_core_free(struct mlx5_core_dev *dev);
+int mlx5_fs_core_init(struct mlx5_core_dev *dev);
+void mlx5_fs_core_cleanup(struct mlx5_core_dev *dev);
 
 int mlx5_fs_egress_acls_init(struct mlx5_core_dev *dev, int total_vports);
 void mlx5_fs_egress_acls_cleanup(struct mlx5_core_dev *dev);
 int mlx5_fs_ingress_acls_init(struct mlx5_core_dev *dev, int total_vports);
 void mlx5_fs_ingress_acls_cleanup(struct mlx5_core_dev *dev);
+
+u32 mlx5_fs_get_capabilities(struct mlx5_core_dev *dev, enum mlx5_flow_namespace_type type);
 
 struct mlx5_flow_root_namespace *find_root(struct fs_node *node);
 

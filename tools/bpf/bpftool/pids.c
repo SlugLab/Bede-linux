@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright (C) 2020 Facebook */
 #include <errno.h>
+#include <linux/err.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,8 +36,8 @@ static void add_ref(struct hashmap *map, struct pid_iter_entry *e)
 	int err, i;
 	void *tmp;
 
-	hashmap__for_each_key_entry(map, entry, u32_as_hash_field(e->id)) {
-		refs = entry->value;
+	hashmap__for_each_key_entry(map, entry, e->id) {
+		refs = entry->pvalue;
 
 		for (i = 0; i < refs->ref_cnt; i++) {
 			if (refs->refs[i].pid == e->pid)
@@ -77,8 +78,10 @@ static void add_ref(struct hashmap *map, struct pid_iter_entry *e)
 	ref->pid = e->pid;
 	memcpy(ref->comm, e->comm, sizeof(ref->comm));
 	refs->ref_cnt = 1;
+	refs->has_bpf_cookie = e->has_bpf_cookie;
+	refs->bpf_cookie = e->bpf_cookie;
 
-	err = hashmap__append(map, u32_as_hash_field(e->id), refs);
+	err = hashmap__append(map, e->id, refs);
 	if (err)
 		p_err("failed to append entry to hashmap for ID %u: %s",
 		      e->id, strerror(errno));
@@ -101,7 +104,7 @@ int build_obj_refs_table(struct hashmap **map, enum bpf_obj_type type)
 	libbpf_print_fn_t default_print;
 
 	*map = hashmap__new(hash_fn_for_key_as_id, equal_fn_for_key_as_id, NULL);
-	if (!*map) {
+	if (IS_ERR(*map)) {
 		p_err("failed to create hashmap for PID references");
 		return -1;
 	}
@@ -180,7 +183,7 @@ void delete_obj_refs_table(struct hashmap *map)
 		return;
 
 	hashmap__for_each_entry(map, entry, bkt) {
-		struct obj_refs *refs = entry->value;
+		struct obj_refs *refs = entry->pvalue;
 
 		free(refs->refs);
 		free(refs);
@@ -197,12 +200,15 @@ void emit_obj_refs_json(struct hashmap *map, __u32 id,
 	if (hashmap__empty(map))
 		return;
 
-	hashmap__for_each_key_entry(map, entry, u32_as_hash_field(id)) {
-		struct obj_refs *refs = entry->value;
+	hashmap__for_each_key_entry(map, entry, id) {
+		struct obj_refs *refs = entry->pvalue;
 		int i;
 
 		if (refs->ref_cnt == 0)
 			break;
+
+		if (refs->has_bpf_cookie)
+			jsonw_lluint_field(json_writer, "bpf_cookie", refs->bpf_cookie);
 
 		jsonw_name(json_writer, "pids");
 		jsonw_start_array(json_writer);
@@ -226,12 +232,15 @@ void emit_obj_refs_plain(struct hashmap *map, __u32 id, const char *prefix)
 	if (hashmap__empty(map))
 		return;
 
-	hashmap__for_each_key_entry(map, entry, u32_as_hash_field(id)) {
-		struct obj_refs *refs = entry->value;
+	hashmap__for_each_key_entry(map, entry, id) {
+		struct obj_refs *refs = entry->pvalue;
 		int i;
 
 		if (refs->ref_cnt == 0)
 			break;
+
+		if (refs->has_bpf_cookie)
+			printf("\n\tbpf_cookie %llu", (unsigned long long) refs->bpf_cookie);
 
 		printf("%s", prefix);
 		for (i = 0; i < refs->ref_cnt; i++) {

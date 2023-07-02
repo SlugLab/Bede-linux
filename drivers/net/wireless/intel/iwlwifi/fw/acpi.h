@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
  * Copyright (C) 2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2021 Intel Corporation
+ * Copyright (C) 2018-2023 Intel Corporation
  */
 #ifndef __iwl_fw_acpi__
 #define __iwl_fw_acpi__
@@ -11,6 +11,7 @@
 #include "fw/api/power.h"
 #include "fw/api/phy.h"
 #include "fw/api/nvm-reg.h"
+#include "fw/api/config.h"
 #include "fw/img.h"
 #include "iwl-trans.h"
 
@@ -23,6 +24,7 @@
 #define ACPI_ECKV_METHOD	"ECKV"
 #define ACPI_PPAG_METHOD	"PPAG"
 #define ACPI_WTAS_METHOD	"WTAS"
+#define ACPI_WPFC_METHOD	"WPFC"
 
 #define ACPI_WIFI_DOMAIN	(0x07)
 
@@ -54,6 +56,7 @@
 #define ACPI_EWRD_WIFI_DATA_SIZE_REV2	((ACPI_SAR_PROFILE_NUM - 1) * \
 					 ACPI_SAR_NUM_CHAINS_REV2 * \
 					 ACPI_SAR_NUM_SUB_BANDS_REV2 + 3)
+#define ACPI_WPFC_WIFI_DATA_SIZE	4 /* 4 filter config words */
 
 /* revision 0 and 1 are identical, except for the semantics in the FW */
 #define ACPI_GEO_NUM_BANDS_REV0		2
@@ -65,10 +68,21 @@
 #define ACPI_ECKV_WIFI_DATA_SIZE	2
 
 /*
- * 1 type, 1 enabled, 1 block list size, 16 block list array
+ * TAS size: 1 elelment for type,
+ *	     1 element for enabled field,
+ *	     1 element for block list size,
+ *	     16 elements for block list array
  */
 #define APCI_WTAS_BLACK_LIST_MAX	16
 #define ACPI_WTAS_WIFI_DATA_SIZE	(3 + APCI_WTAS_BLACK_LIST_MAX)
+#define ACPI_WTAS_ENABLED_MSK		0x1
+#define ACPI_WTAS_OVERRIDE_IEC_MSK	0x2
+#define ACPI_WTAS_ENABLE_IEC_MSK	0x4
+#define ACPI_WTAS_OVERRIDE_IEC_POS	0x1
+#define ACPI_WTAS_ENABLE_IEC_POS	0x2
+#define ACPI_WTAS_USA_UHB_MSK		BIT(16)
+#define ACPI_WTAS_USA_UHB_POS		16
+
 
 #define ACPI_PPAG_WIFI_DATA_SIZE_V1	((IWL_NUM_CHAIN_LIMITS * \
 					  IWL_NUM_SUB_BANDS_V1) + 2)
@@ -80,6 +94,11 @@
 #define ACPI_PPAG_MAX_LB 24
 #define ACPI_PPAG_MIN_HB -16
 #define ACPI_PPAG_MAX_HB 40
+#define ACPI_PPAG_MASK 3
+#define IWL_PPAG_ETSI_MASK BIT(0)
+
+#define IWL_SAR_ENABLE_MSK		BIT(0)
+#define IWL_REDUCE_POWER_FLAGS_POS	1
 
 /*
  * The profile for revision 2 is a superset of revision 1, which is in
@@ -105,6 +124,11 @@ struct iwl_geo_profile {
 	struct iwl_geo_profile_band bands[ACPI_GEO_NUM_BANDS_REV2];
 };
 
+/* Same thing as with SAR, all revisions fit in revision 2 */
+struct iwl_ppag_chain {
+	s8 subbands[ACPI_SAR_NUM_SUB_BANDS_REV2];
+};
+
 enum iwl_dsm_funcs_rev_0 {
 	DSM_FUNC_QUERY = 0,
 	DSM_FUNC_DISABLE_SRD = 1,
@@ -112,7 +136,8 @@ enum iwl_dsm_funcs_rev_0 {
 	DSM_FUNC_ENABLE_6E = 3,
 	DSM_FUNC_11AX_ENABLEMENT = 6,
 	DSM_FUNC_ENABLE_UNII4_CHAN = 7,
-	DSM_FUNC_ACTIVATE_CHANNEL = 8
+	DSM_FUNC_ACTIVATE_CHANNEL = 8,
+	DSM_FUNC_FORCE_DISABLE_CHANNELS = 9
 };
 
 enum iwl_dsm_values_srd {
@@ -146,19 +171,12 @@ struct iwl_fw_runtime;
 extern const guid_t iwl_guid;
 extern const guid_t iwl_rfi_guid;
 
-void *iwl_acpi_get_object(struct device *dev, acpi_string method);
-
 int iwl_acpi_get_dsm_u8(struct device *dev, int rev, int func,
 			const guid_t *guid, u8 *value);
 
 int iwl_acpi_get_dsm_u32(struct device *dev, int rev, int func,
 			 const guid_t *guid, u32 *value);
 
-union acpi_object *iwl_acpi_get_wifi_pkg_range(struct device *dev,
-					       union acpi_object *data,
-					       int min_data_size,
-					       int max_data_size,
-					       int *tbl_rev);
 /**
  * iwl_acpi_get_mcc - read MCC from ACPI, if available
  *
@@ -198,17 +216,22 @@ int iwl_sar_geo_init(struct iwl_fw_runtime *fwrt,
 		     struct iwl_per_chain_offset *table,
 		     u32 n_bands, u32 n_profiles);
 
-int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt, __le32 *block_list_array,
-		     int *block_list_size);
+int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt,
+		     union iwl_tas_config_cmd *cmd, int fw_ver);
 
 __le32 iwl_acpi_get_lari_config_bitmap(struct iwl_fw_runtime *fwrt);
 
-#else /* CONFIG_ACPI */
+int iwl_acpi_get_ppag_table(struct iwl_fw_runtime *fwrt);
 
-static inline void *iwl_acpi_get_object(struct device *dev, acpi_string method)
-{
-	return ERR_PTR(-ENOENT);
-}
+int iwl_read_ppag_table(struct iwl_fw_runtime *fwrt, union iwl_ppag_table_cmd *cmd,
+			int *cmd_size);
+
+bool iwl_acpi_is_ppag_approved(struct iwl_fw_runtime *fwrt);
+
+void iwl_acpi_get_phy_filters(struct iwl_fw_runtime *fwrt,
+			      struct iwl_phy_specific_cfg *filters);
+
+#else /* CONFIG_ACPI */
 
 static inline void *iwl_acpi_get_dsm_object(struct device *dev, int rev,
 					    int func, union acpi_object *args)
@@ -226,15 +249,6 @@ static inline int iwl_acpi_get_dsm_u32(struct device *dev, int rev, int func,
 				       const guid_t *guid, u32 *value)
 {
 	return -ENOENT;
-}
-
-static inline union acpi_object *
-iwl_acpi_get_wifi_pkg_range(struct device *dev,
-			    union acpi_object *data,
-			    int min_data_size, int max_data_size,
-			    int *tbl_rev)
-{
-	return ERR_PTR(-ENOENT);
 }
 
 static inline int iwl_acpi_get_mcc(struct device *dev, char *mcc)
@@ -280,8 +294,7 @@ static inline bool iwl_sar_geo_support(struct iwl_fw_runtime *fwrt)
 }
 
 static inline int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt,
-				   __le32 *block_list_array,
-				   int *block_list_size)
+				   union iwl_tas_config_cmd *cmd, int fw_ver)
 {
 	return -ENOENT;
 }
@@ -291,15 +304,27 @@ static inline __le32 iwl_acpi_get_lari_config_bitmap(struct iwl_fw_runtime *fwrt
 	return 0;
 }
 
-#endif /* CONFIG_ACPI */
-
-static inline union acpi_object *
-iwl_acpi_get_wifi_pkg(struct device *dev,
-		      union acpi_object *data,
-		      int data_size, int *tbl_rev)
+static inline int iwl_acpi_get_ppag_table(struct iwl_fw_runtime *fwrt)
 {
-	return iwl_acpi_get_wifi_pkg_range(dev, data, data_size, data_size,
-					   tbl_rev);
+	return -ENOENT;
 }
+
+static inline int iwl_read_ppag_table(struct iwl_fw_runtime *fwrt,
+				    union iwl_ppag_table_cmd *cmd, int *cmd_size)
+{
+	return -ENOENT;
+}
+
+static inline bool iwl_acpi_is_ppag_approved(struct iwl_fw_runtime *fwrt)
+{
+	return false;
+}
+
+static inline void iwl_acpi_get_phy_filters(struct iwl_fw_runtime *fwrt,
+					    struct iwl_phy_specific_cfg *filters)
+{
+}
+
+#endif /* CONFIG_ACPI */
 
 #endif /* __iwl_fw_acpi__ */

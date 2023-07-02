@@ -120,6 +120,7 @@ struct inode_smack {
 struct task_smack {
 	struct smack_known	*smk_task;	/* label for access control */
 	struct smack_known	*smk_forked;	/* label when forked */
+	struct smack_known	*smk_transmuted;/* label when transmuted */
 	struct list_head	smk_rules;	/* per task access rules */
 	struct mutex		smk_rules_lock;	/* lock for the rules */
 	struct list_head	smk_relabel;	/* transit allowed labels */
@@ -179,15 +180,6 @@ struct smack_known_list_elem {
 	struct list_head	list;
 	struct smack_known	*smk_label;
 };
-
-/* Super block security struct flags for mount options */
-#define FSDEFAULT_MNT	0x01
-#define FSFLOOR_MNT	0x02
-#define FSHAT_MNT	0x04
-#define FSROOT_MNT	0x08
-#define FSTRANS_MNT	0x10
-
-#define NUM_SMK_MNT_OPTS	5
 
 enum {
 	Opt_error = -1,
@@ -387,22 +379,6 @@ static inline struct smack_known *smk_of_inode(const struct inode *isp)
 static inline struct smack_known *smk_of_task(const struct task_smack *tsp)
 {
 	return tsp->smk_task;
-}
-
-static inline struct smack_known *smk_of_task_struct_subj(
-						const struct task_struct *t)
-{
-	struct smack_known *skp;
-	const struct cred *cred;
-
-	rcu_read_lock();
-
-	cred = rcu_dereference(t->cred);
-	skp = smk_of_task(smack_cred(cred));
-
-	rcu_read_unlock();
-
-	return skp;
 }
 
 static inline struct smack_known *smk_of_task_struct_obj(

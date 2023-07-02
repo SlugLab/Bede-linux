@@ -63,29 +63,34 @@ static const struct argp_option opts[] = {
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
+	long ret;
+
 	switch (key) {
 	case ARG_NR_ENTRIES:
-		args.nr_entries = strtol(arg, NULL, 10);
-		if (args.nr_entries == 0) {
+		ret = strtol(arg, NULL, 10);
+		if (ret < 1 || ret > UINT_MAX) {
 			fprintf(stderr, "Invalid nr_entries count.");
 			argp_usage(state);
 		}
+		args.nr_entries = ret;
 		break;
 	case ARG_NR_HASH_FUNCS:
-		args.nr_hash_funcs = strtol(arg, NULL, 10);
-		if (args.nr_hash_funcs == 0 || args.nr_hash_funcs > 15) {
+		ret = strtol(arg, NULL, 10);
+		if (ret < 1 || ret > 15) {
 			fprintf(stderr,
 				"The bloom filter must use 1 to 15 hash functions.");
 			argp_usage(state);
 		}
+		args.nr_hash_funcs = ret;
 		break;
 	case ARG_VALUE_SIZE:
-		args.value_size = strtol(arg, NULL, 10);
-		if (args.value_size < 2 || args.value_size > 256) {
+		ret = strtol(arg, NULL, 10);
+		if (ret < 2 || ret > 256) {
 			fprintf(stderr,
 				"Invalid value size. Must be between 2 and 256 bytes");
 			argp_usage(state);
 		}
+		args.value_size = ret;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -102,9 +107,9 @@ const struct argp bench_bloom_map_argp = {
 
 static void validate(void)
 {
-	if (env.consumer_cnt != 1) {
+	if (env.consumer_cnt != 0) {
 		fprintf(stderr,
-			"The bloom filter benchmarks do not support multi-consumer use\n");
+			"The bloom filter benchmarks do not support consumer\n");
 		exit(1);
 	}
 }
@@ -416,17 +421,12 @@ static void measure(struct bench_res *res)
 	last_false_hits = total_false_hits;
 }
 
-static void *consumer(void *input)
-{
-	return NULL;
-}
-
 const struct bench bench_bloom_lookup = {
 	.name = "bloom-lookup",
+	.argp = &bench_bloom_map_argp,
 	.validate = validate,
 	.setup = bloom_lookup_setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
@@ -434,10 +434,10 @@ const struct bench bench_bloom_lookup = {
 
 const struct bench bench_bloom_update = {
 	.name = "bloom-update",
+	.argp = &bench_bloom_map_argp,
 	.validate = validate,
 	.setup = bloom_update_setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
@@ -445,10 +445,10 @@ const struct bench bench_bloom_update = {
 
 const struct bench bench_bloom_false_positive = {
 	.name = "bloom-false-positive",
+	.argp = &bench_bloom_map_argp,
 	.validate = validate,
 	.setup = false_positive_setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = false_hits_report_progress,
 	.report_final = false_hits_report_final,
@@ -456,10 +456,10 @@ const struct bench bench_bloom_false_positive = {
 
 const struct bench bench_hashmap_without_bloom = {
 	.name = "hashmap-without-bloom",
+	.argp = &bench_bloom_map_argp,
 	.validate = validate,
 	.setup = hashmap_no_bloom_setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
@@ -467,10 +467,10 @@ const struct bench bench_hashmap_without_bloom = {
 
 const struct bench bench_hashmap_with_bloom = {
 	.name = "hashmap-with-bloom",
+	.argp = &bench_bloom_map_argp,
 	.validate = validate,
 	.setup = hashmap_with_bloom_setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,

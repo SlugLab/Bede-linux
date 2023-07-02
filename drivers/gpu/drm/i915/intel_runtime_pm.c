@@ -68,6 +68,7 @@ static noinline depot_stack_handle_t __save_depot_stack(void)
 static void init_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm)
 {
 	spin_lock_init(&rpm->debug.lock);
+	stack_depot_init();
 }
 
 static noinline depot_stack_handle_t
@@ -76,7 +77,7 @@ track_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm)
 	depot_stack_handle_t stack, *stacks;
 	unsigned long flags;
 
-	if (!rpm->available)
+	if (rpm->no_wakeref_tracking)
 		return -1;
 
 	stack = __save_depot_stack();
@@ -591,6 +592,16 @@ void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 	}
 
 	/*
+	 *  FIXME: Temp hammer to keep autosupend disable on lmem supported platforms.
+	 *  As per PCIe specs 5.3.1.4.1, all iomem read write request over a PCIe
+	 *  function will be unsupported in case PCIe endpoint function is in D3.
+	 *  Let's keep i915 autosuspend control 'on' till we fix all known issue
+	 *  with lmem access in D3.
+	 */
+	if (!IS_DGFX(i915))
+		pm_runtime_allow(kdev);
+
+	/*
 	 * The core calls the driver load handler with an RPM reference held.
 	 * We drop that here and will reacquire it during unloading in
 	 * intel_power_domains_fini().
@@ -622,6 +633,8 @@ void intel_runtime_pm_driver_release(struct intel_runtime_pm *rpm)
 						     runtime_pm);
 	int count = atomic_read(&rpm->wakeref_count);
 
+	intel_wakeref_auto_fini(&rpm->userfault_wakeref);
+
 	drm_WARN(&i915->drm, count,
 		 "i915 raw-wakerefs=%d wakelocks=%d on cleanup\n",
 		 intel_rpm_raw_wakeref_count(count),
@@ -639,6 +652,11 @@ void intel_runtime_pm_init_early(struct intel_runtime_pm *rpm)
 
 	rpm->kdev = kdev;
 	rpm->available = HAS_RUNTIME_PM(i915);
+	rpm->suspended = false;
+	atomic_set(&rpm->wakeref_count, 0);
 
 	init_intel_runtime_pm_wakeref(rpm);
+	INIT_LIST_HEAD(&rpm->lmem_userfault_list);
+	spin_lock_init(&rpm->lmem_userfault_lock);
+	intel_wakeref_auto_init(&rpm->userfault_wakeref, i915);
 }
