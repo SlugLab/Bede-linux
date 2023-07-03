@@ -1685,6 +1685,8 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
 	return group_faults_cpu(ng, dst_nid) * group_faults(p, src_nid) * 3 >
 	       group_faults_cpu(ng, src_nid) * group_faults(p, dst_nid) * 4;
 }
+EXPORT_SYMBOL_GPL(should_numa_migrate_memory);
+ALLOW_ERROR_INJECTION(should_numa_migrate_memory, ERRNO);
 
 /*
  * 'numa_type' describes the node at the moment of load balancing.

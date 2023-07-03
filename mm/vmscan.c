@@ -7201,7 +7201,7 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
  */
-static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
+bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 {
 	int i;
 	unsigned long mark = -1;
@@ -7235,6 +7235,7 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 
 	return false;
 }
+EXPORT_SYMBOL(pgdat_balanced);
 
 /* Clear pgdat state for congested, dirty or under writeback. */
 static void clear_pgdat_congested(pg_data_t *pgdat)

@@ -2440,7 +2440,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
  * Returns true if this is a safe migration target node for misplaced NUMA
  * pages. Currently it only checks the watermarks which is crude.
  */
-static bool migrate_balanced_pgdat(struct pglist_data *pgdat,
+bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 				   unsigned long nr_migrate_pages)
 {
 	int z;
@@ -2461,6 +2461,8 @@ static bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 	}
 	return false;
 }
+EXPORT_SYMBOL(migrate_balanced_pgdat);
+ALLOW_ERROR_INJECTION(migrate_balanced_pgdat, TRUE)
 
 static struct folio *alloc_misplaced_dst_folio(struct folio *src,
 					   unsigned long data)

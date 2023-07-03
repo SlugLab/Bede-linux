@@ -1851,6 +1851,8 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 
 	return NULL;
 }
+EXPORT_SYMBOL(policy_nodemask);
+ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
 
 /*
  * Return the  preferred node id for 'prefer' mempolicy, and return
@@ -1859,7 +1861,7 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
  * policy_node() is always coupled with policy_nodemask(), which
  * secures the nodemask limit for 'bind' and 'prefer-many' policy.
  */
-static int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
+int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
 	if (policy->mode == MPOL_PREFERRED) {
 		nd = first_node(policy->nodes);
@@ -1879,6 +1881,8 @@ static int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 
 	return nd;
 }
+EXPORT_SYMBOL(policy_node);
+ALLOW_ERROR_INJECTION(policy_node, TRUE);
 
 /* Do dynamic interleaving for a process */
 static unsigned interleave_nodes(struct mempolicy *policy)
