@@ -12,14 +12,14 @@
 #include <linux/migrate.h>
 
 #include <linux/sched/mm.h>
-
-struct pid_work_struct {
+/** Get the cgroup by this struct. */
+struct bede_work_struct {
 	struct delayed_work work;
-	pid_t pid;
+	struct workqueue_struct *workqueue;
+	// cgroup struct
+	struct cgroup *cgrp;
 };
+// while true migrate pages?
 
-static struct workqueue_struct *pid_workqueue;
-EXPORT_SYMBOL_GPL(pid_workqueue);
-
-static void do_page_walk_and_migration(struct work_struct *work);
+static void do_page_walk_and_migration(struct bede_work_struct *work);
 

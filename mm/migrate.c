@@ -2462,7 +2462,7 @@ bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 	return false;
 }
 EXPORT_SYMBOL(migrate_balanced_pgdat);
-ALLOW_ERROR_INJECTION(migrate_balanced_pgdat, TRUE)
+ALLOW_ERROR_INJECTION(migrate_balanced_pgdat, TRUE);
 
 static struct folio *alloc_misplaced_dst_folio(struct folio *src,
 					   unsigned long data)

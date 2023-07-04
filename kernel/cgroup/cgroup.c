@@ -5731,7 +5731,7 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 		goto out_destroy;
 
 	TRACE_CGROUP_PATH(mkdir, cgrp);
-
+        //create cgroup kthread
 	/* let's create and online css's */
 	kernfs_activate(cgrp->kn);
 
