@@ -5735,6 +5735,8 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 	/* let's create and online css's */
 	kernfs_activate(cgrp->kn);
 
+	// create bede kthread
+	
 	ret = 0;
 	goto out_unlock;
 

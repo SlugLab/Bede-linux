@@ -375,6 +375,46 @@ struct cgroup_freezer_state {
 	int nr_frozen_tasks;
 };
 
+/*
+ * Stuff for reading the 'tasks'/'procs' files.
+ *
+ * Reading this file can return large amounts of data if a cgroup has
+ * *lots* of attached tasks. So it may need several calls to read(),
+ * but we cannot guarantee that the information we produce is correct
+ * unless we produce it entirely atomically.
+ *
+ */
+
+/* which pidlist file are we talking about? */
+enum cgroup_filetype {
+	CGROUP_FILE_PROCS,
+	CGROUP_FILE_TASKS,
+};
+
+/*
+ * A pidlist is a list of pids that virtually represents the contents of one
+ * of the cgroup files ("procs" or "tasks"). We keep a list of such pidlists,
+ * a pair (one each for procs, tasks) for each pid namespace that's relevant
+ * to the cgroup.
+ */
+struct cgroup_pidlist {
+	/*
+	 * used to find which pidlist is wanted. doesn't change as long as
+	 * this particular list stays in the list.
+	*/
+	struct { enum cgroup_filetype type; struct pid_namespace *ns; } key;
+	/* array of xids */
+	pid_t *list;
+	/* how many elements the above list has */
+	int length;
+	/* each of these stored in a list by its cgroup */
+	struct list_head links;
+	/* pointer to the cgroup we belong to, for list removal purposes */
+	struct cgroup *owner;
+	/* for delayed destruction */
+	struct delayed_work destroy_dwork;
+};
+
 struct cgroup {
 	/* self css with NULL ->ss, points back to this cgroup */
 	struct cgroup_subsys_state self;
@@ -510,7 +550,7 @@ struct cgroup {
 #ifdef CONFIG_BPF_SYSCALL
 	struct bpf_local_storage __rcu  *bpf_cgrp_storage;
 #endif
-
+	
 	/* All ancestors including self */
 	struct cgroup *ancestors[];
 };
