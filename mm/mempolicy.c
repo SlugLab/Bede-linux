@@ -68,6 +68,7 @@
    kernel is not always grateful with that.
 */
 
+#include "linux/memcontrol.h"
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mempolicy.h>
@@ -1838,6 +1839,7 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
  */
 nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 {
+	// if this is in 
 	int mode = policy->mode;
 
 	/* Lower zones don't get a nodemask applied for MPOL_BIND */
@@ -1863,6 +1865,11 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
  */
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
+	struct mem_cgroup *memcg= get_mem_cgroup_from_mm(current->mm);
+	if (memcg!=root_mem_cgroup) {
+	if (memcg->node_limit[nd] < memcg-> node_rss[nd])
+		return NUMA_NO_NODE;
+	}
 	if (policy->mode == MPOL_PREFERRED) {
 		nd = first_node(policy->nodes);
 	} else {

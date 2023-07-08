@@ -60,6 +60,7 @@
 #include <linux/sched/deadline.h>
 #include <linux/psi.h>
 #include <net/sock.h>
+#include <linux/bede.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/cgroup.h>
@@ -5736,7 +5737,7 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 	kernfs_activate(cgrp->kn);
 
 	// create bede kthread
-	
+	cgrp->bede = bede_work_alloc(cgrp);
 	ret = 0;
 	goto out_unlock;
 

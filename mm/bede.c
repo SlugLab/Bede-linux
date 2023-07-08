@@ -25,27 +25,29 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 	// Your implementation for walking the lru list and calling
 	// migrate_misplaced_page
 	mm_list = memcg->mm_list;
-	for (int i = 0; i < LRU_GEN_COUNT; i++) {
-		struct lruvec *lruvec = mem_cgroup_lruvec(memcg, i);
-		struct list_head *head = &lruvec->lists[LRU_ACTIVE];
-		struct list_head *page = head->next;
-		while (page != head) {
-			struct page *p = lru_to_page(page);
-			if (p->mapping) {
-				struct address_space *mapping = p->mapping;
-				struct folio *folio = page_folio(p);
-				if (folio_migrate_mapping(mapping)) {
-					migrate_misplaced_page(folio, node);
-				}
-			}
-			page = page->next;
-		}
-	}
+	// for (int i = 0; i < LRU_GEN_CORE; i++) {
+	// 	struct lruvec *lruvec = mem_cgroup_lruvec(memcg, i);
+	// 	struct list_head *head = &lruvec->lists[LRU_ACTIVE];
+	// 	struct list_head *page = head->next;
+	// 	while (page != head) {
+	// 		struct page *p = lru_to_page(page);
+	// 		if (p->mapping) {
+	// 			struct address_space *mapping = p->mapping;
+	// 			struct folio *folio = page_folio(p);
+	// 			if (folio_migrate_mapping(mapping)) {
+	// 				migrate_misplaced_page(folio, node);
+	// 			}
+	// 		}
+	// 		page = page->next;
+	// 	}
+	// }
 
 	mmput(mm);
 }
 
-int __maybe_unused bede_get_node(void) {
+int __maybe_unused bede_get_node(struct mem_cgroup *memcg, int node) {
+
+	
 	return 0;
 }
 struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp){
@@ -91,7 +93,7 @@ static void bede_do_page_walk_and_migration(struct work_struct *work)
 
                     // Your implementation for walking the page
                     // table and calling migrate_misplaced_page
-                    res = bede_get_node();
+                //     res = bede_get_node(memcg, node);
                     if (res) {
                       bede_walk_page_table_and_migrate_to_node(task, res);
                     }

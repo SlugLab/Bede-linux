@@ -246,6 +246,9 @@ struct mem_cgroup {
 	int		under_oom;
 
 	int	swappiness;
+	/* add numa node limit */
+	int    node_limit[4];
+	int    node_rss[4];
 	/* OOM-Killer disable */
 	int		oom_kill_disable;
 

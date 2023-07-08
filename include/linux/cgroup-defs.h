@@ -550,7 +550,9 @@ struct cgroup {
 #ifdef CONFIG_BPF_SYSCALL
 	struct bpf_local_storage __rcu  *bpf_cgrp_storage;
 #endif
-	
+	/* bede work struct */
+	struct bede_work_struct *bede;
+
 	/* All ancestors including self */
 	struct cgroup *ancestors[];
 };

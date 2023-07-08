@@ -4053,6 +4053,110 @@ static int memcg_numa_stat_show(struct seq_file *m, void *v)
 
 	return 0;
 }
+
+static u64 mem_cgroup_node_limit1_read(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	return mem_cgroup_node_limit(memcg, 0);
+}
+
+static int mem_cgroup_node_limit1_write(struct kernfs_open_file *of,
+				      char *buf, size_t nbytes, loff_t off)
+{
+	struct cgroup_subsys_state *css = of_css(of);
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	struct sysinfo si;
+	si_meminfo(&si);
+	char *endp;
+	u64 val = simple_strtoul(buf, &endp, nbytes);
+	if (!val)
+		return -EINVAL;
+	if (val > si.totalram)
+		return -ENOMEM;
+
+	WRITE_ONCE(memcg->node_limit[0], val);
+
+	return 0;
+}
+
+static u64 mem_cgroup_node_limit2_read(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	return mem_cgroup_node_limit(memcg, 1);
+}
+
+static int mem_cgroup_node_limit2_write(struct kernfs_open_file *of,
+				      char *buf, size_t nbytes, loff_t off)
+{
+	struct cgroup_subsys_state *css = of_css(of);
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	struct sysinfo si;
+	si_meminfo(&si);
+	char *endp;
+	u64 val = simple_strtoul(buf, &endp, nbytes);
+	if (!val)
+		return -EINVAL;
+	if (val > si.totalram)
+		return -ENOMEM;
+
+	WRITE_ONCE(memcg->node_limit[1], val);
+
+	return 0;
+}
+
+static u64 mem_cgroup_node_limit3_read(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	return mem_cgroup_node_limit(memcg, 2);
+}
+
+static int mem_cgroup_node_limit3_write(struct kernfs_open_file *of,
+				      char *buf, size_t nbytes, loff_t off)
+{
+	struct cgroup_subsys_state *css = of_css(of);
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	struct sysinfo si;
+	si_meminfo(&si);
+	char *endp;
+	u64 val = simple_strtoul(buf, &endp, nbytes);
+	if (!val)
+		return -EINVAL;
+	if (val > si.totalram)
+		return -ENOMEM;
+
+	WRITE_ONCE(memcg->node_limit[2], val);
+
+	return 0;
+}
+
+static u64 mem_cgroup_node_limit4_read(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	return mem_cgroup_node_limit(memcg, 3);
+}
+
+static int mem_cgroup_node_limit4_write(struct kernfs_open_file *of,
+				      char *buf, size_t nbytes, loff_t off)
+{
+	struct cgroup_subsys_state *css = of_css(of);
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	struct sysinfo si;
+	si_meminfo(&si);
+	char *endp;
+	u64 val = simple_strtoul(buf, &endp, nbytes);
+	if (!val)
+		return -EINVAL;
+	if (val > si.totalram)
+		return -ENOMEM;
+
+	WRITE_ONCE(memcg->node_limit[3], val);
+
+	return 0;
+}
 #endif /* CONFIG_NUMA */
 
 static const unsigned int memcg1_stats[] = {
@@ -6630,7 +6734,7 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 		}
 		seq_putc(m, '\n');
 	}
-
+	// BEDE: write to deferred cached item
 	return 0;
 }
 #endif
@@ -6765,6 +6869,11 @@ static struct cftype memory_files[] = {
 		.seq_show = memory_numa_stat_show,
 	},
 #endif
+	{
+		.name = "node_limit1",
+		.seq_show = mem_cgroup_node_limit1_read,
+		.write = mem_cgroup_node_limit1_write,
+	},
 	{
 		.name = "oom.group",
 		.flags = CFTYPE_NOT_ON_ROOT | CFTYPE_NS_DELEGATABLE,

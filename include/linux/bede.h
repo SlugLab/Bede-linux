@@ -10,14 +10,11 @@
 #include <asm/io.h>
 #include <linux/cgroup-defs.h>
 #include <linux/cgroup.h>
-#include <linux/memcontrol.h>
 #include <linux/migrate.h>
+#include <linux/memcontrol.h>
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/workqueue.h>
-
-#define START_TIME(ts) ts = rdtsc()
-#define END_TIME(msg, ts) trace_printk("%s: %llu\n", msg, rdtsc() - ts)
 
 /** Get the cgroup by this struct. */
 struct bede_work_struct {
@@ -27,9 +24,8 @@ struct bede_work_struct {
 	struct cgroup *cgrp;
 };
 // while true migrate pages?
-void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
+extern void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 						int node);
-static void bede_do_page_walk_and_migration(struct work_struct *work);
-void bede_append_page_walk_and_migration(struct bede_work_struct *work);
-int __maybe_unused bede_get_node(struct mem_cgroup *memcg, int node);
-struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);
+extern void bede_append_page_walk_and_migration(struct bede_work_struct *work);
+extern int bede_get_node(struct mem_cgroup *memcg, int node);
+extern struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);
