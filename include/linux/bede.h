@@ -25,7 +25,7 @@ struct bede_work_struct {
 };
 // while true migrate pages?
 extern void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
-						int node);
+						int from_node,int to_node, int count);
 extern void bede_append_page_walk_and_migration(struct bede_work_struct *work);
 extern int bede_get_node(struct mem_cgroup *memcg, int node);
 extern struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);

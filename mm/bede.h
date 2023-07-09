@@ -28,8 +28,8 @@ struct bede_work_struct {
 };
 // while true migrate pages?
 void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
-						int node);
+						int from_node,int to_node, int count);
 static void bede_do_page_walk_and_migration(struct work_struct *work);
 void bede_append_page_walk_and_migration(struct bede_work_struct *work);
-int __maybe_unused bede_get_node(struct mem_cgroup *memcg, int node);
+int bede_get_node(struct mem_cgroup *memcg, int node);
 struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);

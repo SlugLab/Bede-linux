@@ -109,6 +109,7 @@
 #include <linux/uaccess.h>
 
 #include "internal.h"
+#include "bede.h"
 
 /* Internal flags */
 #define MPOL_MF_DISCONTIG_OK (MPOL_MF_INTERNAL << 0)	/* Skip checks for continuous vmas */
@@ -1864,11 +1865,10 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
  * secures the nodemask limit for 'bind' and 'prefer-many' policy.
  */
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
-{
+{// TODO: check if this is the root memcg and fast path
 	struct mem_cgroup *memcg= get_mem_cgroup_from_mm(current->mm);
 	if (memcg!=root_mem_cgroup) {
-	if (memcg->node_limit[nd] < memcg-> node_rss[nd])
-		return NUMA_NO_NODE;
+		return bede_get_node(memcg, nd);
 	}
 	if (policy->mode == MPOL_PREFERRED) {
 		nd = first_node(policy->nodes);

@@ -1,11 +1,12 @@
 #include "bede.h"
 #include "linux/compiler_attributes.h"
 #include "linux/list.h"
+#include "linux/memcontrol.h"
 #include "linux/mempolicy.h"
 #include "linux/workqueue.h"
 
 void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
-						int node)
+						int from_node,int to_node, int count)
 {
 	struct mm_struct *mm;
 	struct mem_cgroup *memcg;
@@ -26,30 +27,39 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 	// migrate_misplaced_page
 	mm_list = memcg->mm_list;
 	// for (int i = 0; i < LRU_GEN_CORE; i++) {
-	// 	struct lruvec *lruvec = mem_cgroup_lruvec(memcg, i);
-	// 	struct list_head *head = &lruvec->lists[LRU_ACTIVE];
-	// 	struct list_head *page = head->next;
-	// 	while (page != head) {
-	// 		struct page *p = lru_to_page(page);
-	// 		if (p->mapping) {
-	// 			struct address_space *mapping = p->mapping;
-	// 			struct folio *folio = page_folio(p);
-	// 			if (folio_migrate_mapping(mapping)) {
-	// 				migrate_misplaced_page(folio, node);
-	// 			}
+	// struct lruvec *lruvec = mem_cgroup_lruvec(memcg, i);
+	// struct list_head *head = &lruvec->lists[LRU_ACTIVE];
+	// struct list_head *page = head->next;
+	// while (page != head) {
+	// 	struct page *p = lru_to_page(page);
+	// 	if (p->mapping) {
+	// 		struct address_space *mapping = p->mapping;
+	// 		struct folio *folio = page_folio(p);
+	// 		if (folio_migrate_mapping(mapping)) {
+	// 			migrate_misplaced_page(folio, node);
 	// 		}
-	// 		page = page->next;
 	// 	}
+	// 	page = page->next;
+	// }
 	// }
 
 	mmput(mm);
 }
+EXPORT_SYMBOL_GPL(bede_walk_page_table_and_migrate_to_node);
 
-int __maybe_unused bede_get_node(struct mem_cgroup *memcg, int node) {
-
-	
+int bede_get_node(struct mem_cgroup *memcg, int node) {
+	if (memcg->node_limit[node] < memcg->node_rss[node]) {
+		return node;
+	}
+	for (int i = 0; i < 4; i++) {
+		if (memcg->node_limit[i] < memcg->node_rss[i]) {
+			return i;
+		}
+	}
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bede_get_node);
+
 struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp){
 	struct bede_work_struct *bede_work;
 	bede_work = kzalloc(sizeof(*bede_work), GFP_KERNEL);
@@ -64,10 +74,12 @@ struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp){
 	INIT_DELAYED_WORK(&bede_work->work, bede_do_page_walk_and_migration);
 	return bede_work;
 }
+EXPORT_SYMBOL_GPL(bede_work_alloc);
 
 static void bede_do_page_walk_and_migration(struct work_struct *work) 
 {
 	struct bede_work_struct *bede_work = container_of(work, struct bede_work_struct, work.work);
+	struct mem_cgroup *memcg;
         int res;
         struct task_struct *task;
         struct cgroup_pidlist *l, *tmp_l;
@@ -85,17 +97,15 @@ static void bede_do_page_walk_and_migration(struct work_struct *work)
 
                     // scan the whole list of cgrp for getting the
                     // migration task.
-
                     if (!task) {
                       pr_info("Task not found for pid %d\n", pid);
                       return;
                     }
-
-                    // Your implementation for walking the page
-                    // table and calling migrate_misplaced_page
-                //     res = bede_get_node(memcg, node);
+		    memcg = get_mem_cgroup_from_mm(task->mm);
+                    res = bede_get_node(memcg, 0);
+		    // Here consider the control of node limit vs. node rss
                     if (res) {
-                      bede_walk_page_table_and_migrate_to_node(task, res);
+                      bede_walk_page_table_and_migrate_to_node(task, 0, res, memcg->node_rss[res]-memcg->node_limit[res]);
                     }
                   }
                   index++;
@@ -103,6 +113,7 @@ static void bede_do_page_walk_and_migration(struct work_struct *work)
         }
         mutex_unlock(&bede_work->cgrp->pidlist_mutex);
 }
+
 void bede_append_page_walk_and_migration(struct bede_work_struct *bede_work)
 {
         // Re-queue the work with a delay
@@ -110,3 +121,4 @@ void bede_append_page_walk_and_migration(struct bede_work_struct *bede_work)
                            msecs_to_jiffies(0));
         flush_workqueue(bede_work->workqueue);
 }
+EXPORT_SYMBOL_GPL(bede_append_page_walk_and_migration);
