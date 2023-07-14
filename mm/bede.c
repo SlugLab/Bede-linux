@@ -48,11 +48,11 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 EXPORT_SYMBOL_GPL(bede_walk_page_table_and_migrate_to_node);
 
 int bede_get_node(struct mem_cgroup *memcg, int node) {
-	if (memcg->node_limit[node] < memcg->node_rss[node]) {
+	if (memcg->node_limit[node] > memcg->node_rss[node]) {
 		return node;
 	}
 	for (int i = 0; i < 4; i++) {
-		if (memcg->node_limit[i] < memcg->node_rss[i]) {
+		if (memcg->node_limit[i] > memcg->node_rss[i]) {
 			return i;
 		}
 	}
@@ -76,7 +76,7 @@ struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp){
 }
 EXPORT_SYMBOL_GPL(bede_work_alloc);
 
-static void bede_do_page_walk_and_migration(struct work_struct *work) 
+void bede_do_page_walk_and_migration(struct work_struct *work) 
 {
 	struct bede_work_struct *bede_work = container_of(work, struct bede_work_struct, work.work);
 	struct mem_cgroup *memcg;
