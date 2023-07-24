@@ -69,7 +69,6 @@
 */
 
 #include "linux/memcontrol.h"
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mempolicy.h>
 #include <linux/pagewalk.h>
@@ -117,6 +116,7 @@
 
 static struct kmem_cache *policy_cache;
 static struct kmem_cache *sn_cache;
+bool bede_should_policy = false;
 
 /* Highest zone. An specific allocation for a zone below that is not
    policied. */
@@ -1841,24 +1841,16 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 {
 	int mode = policy->mode;
-	struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
-	if (mode != MPOL_BIND)
-		if (memcg) {
-			if (!bede_is_local_bind(memcg)) {
-				if (memcg != root_mem_cgroup) {
-					// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
-					// int bede_get_node(memcg, 0);
-					nodes_clear(policy->nodes);
-					node_set(bede_get_node(memcg, 0),policy->nodes);
-					return &policy->nodes;
-				}
-			} else{
-				nodes_clear(policy->nodes);
-				node_set(1,policy->nodes);
-				return &policy->nodes;
-			}
+	if (mode != MPOL_BIND && bede_should_policy) {
+		struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+		if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
+			// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
+			// int bede_get_node(memcg, 0);
+			nodes_clear(policy->nodes);
+			node_set(bede_get_node(memcg, 0),policy->nodes);
+			return &policy->nodes;
 		}
-
+	}
 	/* Lower zones don't get a nodemask applied for MPOL_BIND */
 	if (unlikely(mode == MPOL_BIND) &&
 		apply_policy_zone(policy, gfp_zone(gfp)) &&
@@ -1881,18 +1873,18 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
  * secures the nodemask limit for 'bind' and 'prefer-many' policy.
  */
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
-{// TODO: check if this is the root memcg and fast path
-        struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
-        if (policy->mode != MPOL_BIND) {
-                if (memcg) {
-                        if (!bede_is_local_bind(memcg)) {
-                                if (memcg != root_mem_cgroup) {
-                                        // bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
-                                        return bede_get_node(memcg, nd);
-                                }
-                        } else {
-                                return 1;
-                        }
+{
+        if (policy->mode != MPOL_BIND && bede_should_policy) {
+		rcu_read_lock();
+        	struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+                if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
+			if (bede_flush_node_rss(memcg)) {
+				// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
+				mem_cgroup_flush_stats();
+				nd = bede_get_node(memcg, nd);
+				rcu_read_unlock();
+				return nd;
+			}
                 }
         }
         if (policy->mode == MPOL_PREFERRED) {

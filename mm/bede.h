@@ -34,3 +34,4 @@ void bede_append_page_walk_and_migration(struct bede_work_struct *work);
 int bede_get_node(struct mem_cgroup *memcg, int node);
 bool bede_is_local_bind(struct mem_cgroup *memcg);
 struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);
+bool bede_flush_node_rss(struct mem_cgroup *memcg);

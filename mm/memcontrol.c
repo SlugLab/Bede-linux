@@ -3966,7 +3966,7 @@ static int mem_cgroup_move_charge_write(struct cgroup_subsys_state *css,
 #endif
 
 #ifdef CONFIG_NUMA
-
+extern bool bede_should_policy;
 #define LRU_ALL_FILE (BIT(LRU_INACTIVE_FILE) | BIT(LRU_ACTIVE_FILE))
 #define LRU_ALL_ANON (BIT(LRU_INACTIVE_ANON) | BIT(LRU_ACTIVE_ANON))
 #define LRU_ALL	     ((1 << NR_LRU_LISTS) - 1)
@@ -4081,7 +4081,7 @@ static ssize_t mem_cgroup_node_limit1_write(struct kernfs_open_file *of,
 		return -ENOMEM;
 
 	WRITE_ONCE(memcg->node_limit[0], val);
-
+	bede_should_policy = true;
 	return nbytes;
 }
 
@@ -4112,7 +4112,7 @@ static ssize_t mem_cgroup_node_limit2_write(struct kernfs_open_file *of,
 		return -ENOMEM;
 
 	WRITE_ONCE(memcg->node_limit[1], val);
-
+	bede_should_policy = true;
 	return nbytes;
 }
 
@@ -4143,7 +4143,7 @@ static ssize_t mem_cgroup_node_limit3_write(struct kernfs_open_file *of,
 		return -ENOMEM;
 
 	WRITE_ONCE(memcg->node_limit[2], val);
-
+	bede_should_policy = true;
 	return nbytes;
 }
 
@@ -4174,7 +4174,7 @@ static ssize_t mem_cgroup_node_limit4_write(struct kernfs_open_file *of,
 		return -ENOMEM;
 
 	WRITE_ONCE(memcg->node_limit[3], val);
-
+	bede_should_policy = true;
 	return nbytes;
 }
 #endif /* CONFIG_NUMA */
@@ -6749,6 +6749,7 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 			size = lruvec_page_state_output(lruvec,
 							memory_stats[i].idx);
 			seq_printf(m, " N%d=%llu", nid, size);
+			memcg->node_rss[nid] = ((lruvec_page_state(lruvec, NR_ANON_MAPPED)) * PAGE_SIZE) >> 20 ;
 		}
 		seq_putc(m, '\n');
 	}
