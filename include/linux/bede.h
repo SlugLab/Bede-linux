@@ -22,6 +22,7 @@ struct bede_work_struct {
 	struct workqueue_struct *workqueue;
 	// cgroup struct reverse mapping
 	struct cgroup *cgrp;
+	bool should_migrate;
 };
 // while true migrate pages?
 extern void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,

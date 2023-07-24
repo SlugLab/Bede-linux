@@ -4055,7 +4055,7 @@ static int memcg_numa_stat_show(struct seq_file *m, void *v)
 }
 
 static int mem_cgroup_node_limit1_read(struct seq_file *m, void *v)
-{\
+{
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
 
 	seq_printf(m, "%d\n", mem_cgroup_node_limit(memcg,0));
@@ -4086,7 +4086,7 @@ static ssize_t mem_cgroup_node_limit1_write(struct kernfs_open_file *of,
 }
 
 static int mem_cgroup_node_limit2_read(struct seq_file *m, void *v)
-{\
+{
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
 
 	seq_printf(m, "%d\n", mem_cgroup_node_limit(memcg,1));
@@ -4117,7 +4117,7 @@ static ssize_t mem_cgroup_node_limit2_write(struct kernfs_open_file *of,
 }
 
 static int mem_cgroup_node_limit3_read(struct seq_file *m, void *v)
-{\
+{
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
 
 	seq_printf(m, "%d\n", mem_cgroup_node_limit(memcg,2));
@@ -6734,10 +6734,6 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 	int i;
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
 
-	mem_cgroup_flush_stats();
-	for(i = 0; i < 4; i++){
-		memcg->node_rss[i] = 0;
-	}
 	for (i = 0; i < ARRAY_SIZE(memory_stats); i++) {
 		int nid;
 
@@ -6752,7 +6748,6 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 			lruvec = mem_cgroup_lruvec(memcg, NODE_DATA(nid));
 			size = lruvec_page_state_output(lruvec,
 							memory_stats[i].idx);
-			memcg->node_rss[nid] += size>>20;
 			seq_printf(m, " N%d=%llu", nid, size);
 		}
 		seq_putc(m, '\n');
@@ -6891,7 +6886,6 @@ static struct cftype memory_files[] = {
 		.name = "numa_stat",
 		.seq_show = memory_numa_stat_show,
 	},
-#endif
 	{
 		.name = "node_limit1",
 		.flags = CFTYPE_NOT_ON_ROOT | CFTYPE_NS_DELEGATABLE,
@@ -6916,6 +6910,7 @@ static struct cftype memory_files[] = {
 		.seq_show = mem_cgroup_node_limit4_read,
 		.write = mem_cgroup_node_limit4_write,
 	},
+#endif
 	{
 		.name = "oom.group",
 		.flags = CFTYPE_NOT_ON_ROOT | CFTYPE_NS_DELEGATABLE,

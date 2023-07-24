@@ -627,6 +627,10 @@ static inline int mem_cgroup_node_limit(struct mem_cgroup *memcg, int nid)
 {
 	return READ_ONCE(memcg->node_limit[nid]);
 }
+static inline int mem_cgroup_node_rss(struct mem_cgroup *memcg, int nid)
+{
+	return READ_ONCE(memcg->node_rss[nid]);
+}
 #else
 static inline int mem_cgroup_swappiness(struct mem_cgroup *mem)
 {

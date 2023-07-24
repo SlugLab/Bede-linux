@@ -1840,8 +1840,24 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
  */
 nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 {
-	// if this is in 
 	int mode = policy->mode;
+	struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+	if (mode != MPOL_BIND)
+		if (memcg) {
+			if (!bede_is_local_bind(memcg)) {
+				if (memcg != root_mem_cgroup) {
+					// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
+					// int bede_get_node(memcg, 0);
+					nodes_clear(policy->nodes);
+					node_set(bede_get_node(memcg, 0),policy->nodes);
+					return &policy->nodes;
+				}
+			} else{
+				nodes_clear(policy->nodes);
+				node_set(1,policy->nodes);
+				return &policy->nodes;
+			}
+		}
 
 	/* Lower zones don't get a nodemask applied for MPOL_BIND */
 	if (unlikely(mode == MPOL_BIND) &&
@@ -1866,22 +1882,31 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
  */
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {// TODO: check if this is the root memcg and fast path
-	struct mem_cgroup *memcg= get_mem_cgroup_from_mm(current->mm);
-	if (memcg!=root_mem_cgroup) {
-		return bede_get_node(memcg, nd);
-	}
-	if (policy->mode == MPOL_PREFERRED) {
-		nd = first_node(policy->nodes);
-	} else {
-		/*
-		 * __GFP_THISNODE shouldn't even be used with the bind policy
-		 * because we might easily break the expectation to stay on the
-		 * requested node and not break the policy.
-		 */
-		WARN_ON_ONCE(policy->mode == MPOL_BIND && (gfp & __GFP_THISNODE));
-	}
+        struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+        if (policy->mode != MPOL_BIND) {
+                if (memcg) {
+                        if (!bede_is_local_bind(memcg)) {
+                                if (memcg != root_mem_cgroup) {
+                                        // bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
+                                        return bede_get_node(memcg, nd);
+                                }
+                        } else {
+                                return 1;
+                        }
+                }
+        }
+        if (policy->mode == MPOL_PREFERRED) {
+                nd = first_node(policy->nodes);
+        } else {
+                /*
+                 * __GFP_THISNODE shouldn't even be used with the bind policy
+                 * because we might easily break the expectation to stay on the
+                 * requested node and not break the policy.
+                 */
+                WARN_ON_ONCE(policy->mode == MPOL_BIND && (gfp & __GFP_THISNODE));
+        }
 
-	if ((policy->mode == MPOL_BIND ||
+        if ((policy->mode == MPOL_BIND ||
 	     policy->mode == MPOL_PREFERRED_MANY) &&
 	    policy->home_node != NUMA_NO_NODE)
 		return policy->home_node;
