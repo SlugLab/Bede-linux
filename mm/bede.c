@@ -7,7 +7,10 @@
 
 bool bede_flush_node_rss(struct mem_cgroup *memcg) { // work around for every time call policy_node for delayed
 	int nid;
-	// mem_cgroup_flush_stats();
+	if (mem_cgroup_disabled()){
+		return false;
+	}
+	mem_cgroup_flush_stats();
 	for_each_node_state(nid, N_MEMORY) {
 		u64 size;
 		struct lruvec *lruvec;
@@ -17,7 +20,7 @@ bool bede_flush_node_rss(struct mem_cgroup *memcg) { // work around for every ti
 		lruvec = mem_cgroup_lruvec(memcg, pgdat);
 		if (!lruvec)
 			return false;
-		size = (lruvec_page_state(lruvec, NR_ANON_MAPPED)) * PAGE_SIZE;
+		size = lruvec_page_state_local(lruvec, NR_ANON_MAPPED) >> PAGE_SHIFT;
 		memcg->node_rss[nid] = size >> 20;
 	}
 	return true;
@@ -129,7 +132,7 @@ void bede_do_page_walk_and_migration(struct work_struct *work)
                       return;
                     }
 		    memcg = get_mem_cgroup_from_mm(task->mm);
-		    bede_flush_node_rss(memcg);
+		//     bede_flush_node_rss(memcg);
                 //     res = bede_get_node(memcg, 0);
 		//     // Here consider the control of node limit vs. node rss
                 //     if (bede_work->should_migrate){ // The same as before requires it's filled to full

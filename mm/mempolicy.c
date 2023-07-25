@@ -1875,16 +1875,13 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
         if (policy->mode != MPOL_BIND && bede_should_policy) {
-		rcu_read_lock();
         	struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
                 if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
-			if (bede_flush_node_rss(memcg)) {
+			// if (bede_flush_node_rss(memcg)) {
 				// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
-				mem_cgroup_flush_stats();
 				nd = bede_get_node(memcg, nd);
-				rcu_read_unlock();
 				return nd;
-			}
+			// }
                 }
         }
         if (policy->mode == MPOL_PREFERRED) {
