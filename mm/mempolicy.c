@@ -1842,15 +1842,21 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 {
 	int mode = policy->mode;
 	if (mode != MPOL_BIND && bede_should_policy) {
-		struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
-		if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
-			// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
-			// int bede_get_node(memcg, 0);
-			nodes_clear(policy->nodes);
-			node_set(bede_get_node(memcg, 0),policy->nodes);
-			return &policy->nodes;
-		}
-	}
+                struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+                if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
+                        if (policy) {
+                                if (bede_flush_node_rss(memcg))
+                                  	if (!bede_is_local_bind(memcg)) {
+                                  	  node_set(bede_get_node(memcg, 0),
+                                  	           policy->nodes);
+                                  	  return &policy->nodes;
+                                  	} else {
+                                  	  node_set(1, policy->nodes);
+                                  	  return &policy->nodes;
+                                  	}
+                        }
+                }
+        }
 	/* Lower zones don't get a nodemask applied for MPOL_BIND */
 	if (unlikely(mode == MPOL_BIND) &&
 		apply_policy_zone(policy, gfp_zone(gfp)) &&
@@ -1875,17 +1881,16 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
         if (policy->mode != MPOL_BIND && bede_should_policy) {
-		rcu_read_lock();
-        	struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
-                if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
-			if (bede_flush_node_rss(memcg)) {
-				// bede_append_page_walk_and_migration(current->cgroups->dfl_cgrp->bede);
-				mem_cgroup_flush_stats();
-				nd = bede_get_node(memcg, nd);
-				rcu_read_unlock();
-				return nd;
+		struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
+		if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
+			 if (bede_flush_node_rss(memcg)) {
+				if (!bede_is_local_bind(memcg)) {
+					return bede_get_node(memcg, nd);
+				} else {
+					return 1;
+				}
 			}
-                }
+		}
         }
         if (policy->mode == MPOL_PREFERRED) {
                 nd = first_node(policy->nodes);

@@ -2464,7 +2464,7 @@ bool migrate_balanced_pgdat(struct pglist_data *pgdat,
 EXPORT_SYMBOL(migrate_balanced_pgdat);
 ALLOW_ERROR_INJECTION(migrate_balanced_pgdat, TRUE);
 
-static struct folio *alloc_misplaced_dst_folio(struct folio *src,
+struct folio *alloc_misplaced_dst_folio(struct folio *src,
 					   unsigned long data)
 {
 	int nid = (int) data;
@@ -2480,6 +2480,7 @@ static struct folio *alloc_misplaced_dst_folio(struct folio *src,
 	}
 	return __folio_alloc_node(gfp, order, nid);
 }
+EXPORT_SYMBOL(alloc_misplaced_dst_folio);
 
 static int numamigrate_isolate_page(pg_data_t *pgdat, struct page *page)
 {

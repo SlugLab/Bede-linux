@@ -1,22 +1,26 @@
 #include "bede.h"
+#include "internal.h"
 #include "linux/compiler_attributes.h"
 #include "linux/list.h"
 #include "linux/memcontrol.h"
 #include "linux/mempolicy.h"
 #include "linux/workqueue.h"
+#include "linux/mm_inline.h"
 
+extern struct folio *alloc_misplaced_dst_folio(struct folio *src,
+					   unsigned long data);
 bool bede_flush_node_rss(struct mem_cgroup *memcg) { // work around for every time call policy_node for delayed
 	int nid;
-	// mem_cgroup_flush_stats();
+	mem_cgroup_flush_stats();
 	for_each_node_state(nid, N_MEMORY) {
 		u64 size;
 		struct lruvec *lruvec;
 		pg_data_t *pgdat = NODE_DATA(nid);
 		if (!pgdat)
-			return false;
+			return true;
 		lruvec = mem_cgroup_lruvec(memcg, pgdat);
 		if (!lruvec)
-			return false;
+			return true;
 		size = (lruvec_page_state(lruvec, NR_ANON_MAPPED)) * PAGE_SIZE;
 		memcg->node_rss[nid] = size >> 20;
 	}
@@ -30,7 +34,7 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 	struct mm_struct *mm;
 	struct mem_cgroup *memcg;
 	struct lru_gen_mm_list mm_list;
-	struct folio src_folio;
+	int isolated, nr_succeeded = 0, nr_remaining;
 	// Get the memory management structure of the task
 	mm = get_task_mm(task);
 	if (!mm) {
@@ -46,20 +50,41 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 	// migrate_misplaced_page
 	mm_list = memcg->mm_list;
 	// demotion has a hierarchy
-	// struct lruvec *lruvec = mem_cgroup_lruvec(memcg, i);
-	// struct list_head *head = &lruvec->lists[LRU_ACTIVE];
-	// struct list_head *page = head->next;
-	// while (page != head) {
-	// 	struct page *p = lru_to_page(page);
-	// 	if (p->mapping) {
-	// 		struct address_space *mapping = p->mapping;
-	// 		struct folio *folio = page_folio(p);
-	// 		if (folio_migrate_mapping(mapping)) {
-	// 			migrate_misplaced_page(folio, node);
-	// 		}
-	// 	}
-	// 	page = page->next;
-	// }
+	pg_data_t *pgdat = NODE_DATA(from_node);
+	struct lruvec *lruvec = mem_cgroup_lruvec(memcg, from_node);
+	struct list_head *head = &lruvec->lists[LRU_ACTIVE];
+	struct list_head *page = head->next;
+	while (page != head && count > 0) {
+		LIST_HEAD(migratepages);
+		struct page *p = lru_to_page(page);
+		if (p->mapping) {
+			struct address_space *mapping = p->mapping;
+			struct folio *folio = page_folio(p);
+			// if (folio_migrate_mapping(mapping)) {
+			// migrate_misplaced_page(folio, node);
+			// }
+			list_add(&p->lru, &migratepages);
+			nr_remaining = migrate_pages(&migratepages, alloc_misplaced_dst_folio,
+						NULL, to_node, MIGRATE_ASYNC,
+						MR_NUMA_MISPLACED, &nr_succeeded);
+			if (nr_remaining) {
+				if (!list_empty(&migratepages)) {
+					list_del(&p->lru);
+					mod_node_page_state(page_pgdat(p), NR_ISOLATED_ANON +
+							page_is_file_lru(p), -thp_nr_pages(p));
+					putback_lru_page(p);
+				}
+				isolated = 0;
+			}
+			if (nr_succeeded) {
+				count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_succeeded);
+				mod_node_page_state(pgdat,PGPROMOTE_SUCCESS,
+							nr_succeeded);
+			}
+			BUG_ON(!list_empty(&migratepages));
+		}
+		page = page->next;
+	}
 
 	mmput(mm);
 }
