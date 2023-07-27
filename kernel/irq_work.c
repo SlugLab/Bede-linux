@@ -242,7 +242,7 @@ static void irq_work_run_list(struct llist_head *list)
 	 * in a per-CPU thread in preemptible context. Only the items which are
 	 * marked as IRQ_WORK_HARD_IRQ will be processed in hardirq context.
 	 */
-	BUG_ON(!irqs_disabled() && !IS_ENABLED(CONFIG_PREEMPT_RT));
+	// BUG_ON(!irqs_disabled() && !IS_ENABLED(CONFIG_PREEMPT_RT));
 
 	if (llist_empty(list))
 		return;

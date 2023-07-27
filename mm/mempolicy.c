@@ -1842,7 +1842,6 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
 {
 	int mode = policy->mode;
 	if (mode != MPOL_BIND && bede_should_policy) {
-		preempt_disable_nested();
                 struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
                 if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
                         if (policy) {
@@ -1851,7 +1850,6 @@ nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy)
                                 return &policy->nodes;
                         }
                 }
-		preempt_enable_nested();
         }
 	/* Lower zones don't get a nodemask applied for MPOL_BIND */
 	if (unlikely(mode == MPOL_BIND) &&
@@ -1877,7 +1875,6 @@ ALLOW_ERROR_INJECTION(policy_nodemask, TRUE);
 int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 {
         if (policy->mode != MPOL_BIND && bede_should_policy) {
-		preempt_disable_nested();
 		struct mem_cgroup *memcg = get_mem_cgroup_from_mm(current->mm);
 		if (memcg && root_mem_cgroup && memcg != root_mem_cgroup) {
 			 if (bede_flush_node_rss(memcg)) {
@@ -1888,7 +1885,6 @@ int policy_node(gfp_t gfp, struct mempolicy *policy, int nd)
 				}
 			}
 		}
-		preempt_enable_nested();
         }
         if (policy->mode == MPOL_PREFERRED) {
                 nd = first_node(policy->nodes);

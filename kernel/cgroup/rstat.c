@@ -234,9 +234,11 @@ __bpf_kfunc void cgroup_rstat_flush(struct cgroup *cgrp)
 {
 	might_sleep();
 
-	spin_lock_irq(&cgroup_rstat_lock);
-	cgroup_rstat_flush_locked(cgrp);
-	spin_unlock_irq(&cgroup_rstat_lock);
+	unsigned long flags;
+
+	spin_lock_irqsave(&cgroup_rstat_lock, flags);
+	cgroup_rstat_flush_locked(cgrp, false);
+	spin_unlock_irqrestore(&cgroup_rstat_lock, flags);
 }
 
 /**
