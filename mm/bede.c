@@ -21,7 +21,7 @@ bool bede_flush_node_rss(struct mem_cgroup *memcg) { // work around for every ti
 		lruvec = mem_cgroup_lruvec(memcg, pgdat);
 		if (!lruvec)
 			return true;
-		size = (lruvec_page_state(lruvec, NR_ANON_MAPPED)) * PAGE_SIZE;
+		size = (lruvec_page_state(lruvec, NR_ANON_MAPPED)+lruvec_page_state(lruvec, NR_FILE_PAGES)) << PAGE_SHIFT;
 		memcg->node_rss[nid] = size >> 20;
 	}
 	return true;
@@ -91,7 +91,10 @@ void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 EXPORT_SYMBOL_GPL(bede_walk_page_table_and_migrate_to_node);
 
 
-int bede_get_node(struct mem_cgroup *memcg, int node) {
+inline int bede_get_node(struct mem_cgroup *memcg, int node) {
+	if (memcg->node_limit[0] > memcg->node_rss[0]) {
+		return 0;
+	}
 	if (memcg->node_limit[node] > memcg->node_rss[node]) {
 		return node;
 	}
@@ -157,13 +160,13 @@ void bede_do_page_walk_and_migration(struct work_struct *work)
 		    bede_flush_node_rss(memcg);
                 //     res = bede_get_node(memcg, 0);
 		//     // Here consider the control of node limit vs. node rss
-                //     if (bede_work->should_migrate){ // The same as before requires it's filled to full
-		// 	if (res) {  // denote
-                //       		bede_walk_page_table_and_migrate_to_node(task, 0, res, memcg->node_rss[res]-memcg->node_limit[res]);
-                //     	} else { // promote
-		// 		bede_walk_page_table_and_migrate_to_node(task, res, 0, memcg->node_limit[res]-memcg->node_rss[res]);
-		//     	}
-		//     }
+                    if (bede_work->should_migrate){ // The same as before requires it's filled to full
+			if (res) {  // denote
+                      		bede_walk_page_table_and_migrate_to_node(task, 0, res, memcg->node_rss[res]-memcg->node_limit[res]);
+                    	} else { // promote
+				bede_walk_page_table_and_migrate_to_node(task, res, 0, memcg->node_limit[res]-memcg->node_rss[res]);
+		    	}
+		    }
                   }
                   index++;
                 }

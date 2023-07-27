@@ -1074,11 +1074,11 @@ static inline void count_memcg_events(struct mem_cgroup *memcg,
 				      enum vm_event_item idx,
 				      unsigned long count)
 {
-	unsigned long flags;
+	// unsigned long flags;
 
-	local_irq_save(flags);
-	__count_memcg_events(memcg, idx, count);
-	local_irq_restore(flags);
+	// local_irq_save(flags);
+	// __count_memcg_events(memcg, idx, count);
+	// local_irq_restore(flags);
 }
 
 static inline void count_memcg_page_event(struct page *page,
