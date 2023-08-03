@@ -1,6 +1,14 @@
-# Bede Kernel
-## Design
-1. DSA Migration impl
-2. on cgroup starting bede kthread
-3. on cgroup change, change the bede target
-4. let k8s change the change the cgroup procfs variable to change the migration target
+Bede Kernel
+
+Design
+1. TODO: DSA Migration impl, currently just migrate page async.
+2. on cgroup start, starting bede struct.
+3. on cgroup init procfs, init the policy_node instrumentation. Locally bind specially dealt with.
+4. let k8s change the cgroup procfs variable to change the migration target.
+
+Known Limitation
+1. on clone3 syscall, the cloned process may double the rss limitation. Python is not working, since it calls clone and detach child at very beginning.
+2. on file-backed mmap syscall, on page fault, the decision is not go through the policy_node path, thus invalid.
+
+Pitfalls
+1. Kernel 6.4.0 removes atomic irq https://lore.kernel.org/all/20230421174020.2994750-1-yosryahmed@google.com/, which makes numastat in hot path crash irq.
