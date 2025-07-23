@@ -26,6 +26,16 @@ struct bede_work_struct {
 	struct cgroup *cgrp;
 	bool should_migrate;
 };
+
+/* Watermark structure for userspace control */
+struct bede_watermark {
+	unsigned long high_watermark;  /* High watermark to trigger demotion */
+	unsigned long low_watermark;   /* Low watermark to trigger promotion */
+	unsigned long migration_limit; /* Max pages to migrate per cycle */
+};
+
+/* Global watermark control */
+extern struct bede_watermark bede_watermarks;
 // while true migrate pages?
 void bede_walk_page_table_and_migrate_to_node(struct task_struct *task,
 						int from_node,int to_node, int count);
@@ -35,3 +45,10 @@ int bede_get_node(struct mem_cgroup *memcg, int node);
 bool bede_is_local_bind(struct mem_cgroup *memcg);
 struct bede_work_struct *bede_work_alloc(struct cgroup *cgrp);
 bool bede_flush_node_rss(struct mem_cgroup *memcg);
+
+/* Promotion and demotion functions */
+void bede_promotion(struct work_struct *work);
+void bede_demotion(struct work_struct *work);
+int bede_init_kthread(void);
+void bede_exit_kthread(void);
+void bede_set_watermarks(unsigned long high, unsigned long low, unsigned long limit);
